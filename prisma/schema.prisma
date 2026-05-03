@@ -1,0 +1,58 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Textbook {
+  id        Int       @id @default(autoincrement())
+  name      String
+  grade     String?
+  sortOrder Int       @default(0) @map("sort_order")
+  createdAt DateTime  @default(now()) @map("created_at")
+  chapters  Chapter[]
+
+  @@map("textbooks")
+}
+
+model Chapter {
+  id              Int              @id @default(autoincrement())
+  textbookId      Int              @map("textbook_id")
+  parentId        Int?             @map("parent_id")
+  title           String
+  sortOrder       Int              @default(0) @map("sort_order")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  textbook        Textbook         @relation(fields: [textbookId], references: [id])
+  parent          Chapter?         @relation("ChapterTree", fields: [parentId], references: [id])
+  children        Chapter[]        @relation("ChapterTree")
+  knowledgePoints KnowledgePoint[]
+
+  @@map("chapters")
+}
+
+model KnowledgePoint {
+  id        Int       @id @default(autoincrement())
+  chapterId Int       @map("chapter_id")
+  name      String
+  sortOrder Int       @default(0) @map("sort_order")
+  createdAt DateTime  @default(now()) @map("created_at")
+  chapter   Chapter   @relation(fields: [chapterId], references: [id])
+  problems  Problem[]
+
+  @@map("knowledge_points")
+}
+
+model Problem {
+  id               Int            @id @default(autoincrement())
+  knowledgePointId Int            @map("knowledge_point_id")
+  content          String         // TipTap JSON
+  difficulty       Int            @default(1)
+  source           String?
+  createdAt        DateTime       @default(now()) @map("created_at")
+  knowledgePoint   KnowledgePoint @relation(fields: [knowledgePointId], references: [id])
+
+  @@map("problems")
+}
