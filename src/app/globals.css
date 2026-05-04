@@ -57,6 +57,14 @@ body {
   word-break: normal;
 }
 
+/* Inline read-only content inside problem cards */
+.problem-card-content .tiptap-editor {
+  min-height: auto;
+  padding: 0;
+  line-height: 1.6;
+  font-size: 0.875rem;
+}
+
 /* Inline math node styles */
 .inline-math {
   display: inline;

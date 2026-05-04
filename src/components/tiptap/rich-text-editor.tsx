@@ -1,13 +1,14 @@
 "use client";
 
+import { useEffect } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
+import type { Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Superscript from "@tiptap/extension-superscript";
 import Subscript from "@tiptap/extension-subscript";
 import Underline from "@tiptap/extension-underline";
 import ImageExt from "@tiptap/extension-image";
 import { InlineMath } from "./math-extension";
-import { Toolbar } from "./toolbar";
 
 const FORMULA_CLASS = "formula-placeholder";
 
@@ -101,12 +102,18 @@ interface RichTextEditorProps {
   content?: string;
   onChange?: (html: string, json: object) => void;
   editable?: boolean;
+  plain?: boolean;
+  onFocus?: (editor: Editor) => void;
+  onEditorReady?: (editor: Editor) => void;
 }
 
 export function RichTextEditor({
   content,
   onChange,
   editable = true,
+  plain = false,
+  onFocus,
+  onEditorReady,
 }: RichTextEditorProps) {
   const editor = useEditor({
     immediatelyRender: false,
@@ -166,6 +173,9 @@ export function RichTextEditor({
         return false;
       },
     },
+    onFocus: ({ editor: ed }) => {
+      onFocus?.(ed);
+    },
     onUpdate: ({ editor }) => {
       if (onChange) {
         onChange(editor.getHTML(), editor.getJSON());
@@ -173,13 +183,22 @@ export function RichTextEditor({
     },
   });
 
+  useEffect(() => {
+    if (editor && onEditorReady) {
+      onEditorReady(editor);
+    }
+  }, [editor, onEditorReady]);
+
   if (!editor) {
     return null;
   }
 
+  if (plain) {
+    return <EditorContent editor={editor} />;
+  }
+
   return (
     <div className="border rounded-lg overflow-hidden bg-white">
-      {editable && <Toolbar editor={editor} />}
       <EditorContent editor={editor} />
     </div>
   );

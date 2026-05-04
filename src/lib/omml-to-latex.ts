@@ -191,7 +191,7 @@ export function ommlToLatex(node: unknown): string {
   // Accent: m:acc
   if (obj["acc"] !== undefined) {
     const acc = obj["acc"] as OMMLNode;
-    const accChr = getText(acc["accPr"]?.["chr"] || acc["chr"])
+    const accChr = getText((acc["accPr"] as OMMLNode)?.["chr"] || acc["chr"])
       || (acc["@_m:val"] || acc["@_val"]) as string || "";
     const e = ommlToLatex(acc["e"]);
     const cmd = ACCENT_MAP[accChr];

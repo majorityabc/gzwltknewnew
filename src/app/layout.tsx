@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -24,10 +25,27 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="zh-CN"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <nav className="bg-white border-b shadow-sm flex-shrink-0">
+          <div className="max-w-7xl mx-auto px-4 py-2 flex items-center justify-between">
+            <Link href="/" className="text-lg font-bold text-gray-800 hover:text-blue-600 transition-colors">
+              高中物理题库
+            </Link>
+            <div className="flex items-center gap-6 text-sm">
+              <Link href="/" className="text-gray-600 hover:text-blue-600 transition-colors">
+                题库管理
+              </Link>
+              <Link href="/upload" className="text-gray-600 hover:text-blue-600 transition-colors">
+                上传试卷
+              </Link>
+            </div>
+          </div>
+        </nav>
+        <div className="flex-1">{children}</div>
+      </body>
     </html>
   );
 }

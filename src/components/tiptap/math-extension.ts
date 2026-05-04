@@ -38,7 +38,7 @@ export const InlineMath = Node.create<InlineMathOptions>({
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(MathNodeView);
+    return ReactNodeViewRenderer(MathNodeView as any);
   },
 
   addCommands() {
