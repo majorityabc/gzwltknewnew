@@ -41,7 +41,8 @@ export async function POST(request: NextRequest) {
       { data: { id: user.id, username: user.username } },
       { status: 201 },
     );
-  } catch {
+  } catch (e) {
+    console.error("Register error:", e);
     return NextResponse.json(
       { error: "注册失败，请重试" },
       { status: 500 },
