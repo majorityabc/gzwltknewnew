@@ -21,76 +21,87 @@ export async function POST() {
         name: "人教版高中物理必修一",
         grade: "高一",
         chapters: [
-          {
-            title: "第一章 运动的描述",
-            points: ["质点 参考系", "时间 位移", "位置变化快慢的描述——速度", "速度变化快慢的描述——加速度"],
-          },
-          {
-            title: "第二章 匀变速直线运动的研究",
-            points: ["实验：探究小车速度随时间变化的规律", "匀变速直线运动的速度与时间的关系", "匀变速直线运动的位移与时间的关系", "自由落体运动"],
-          },
-          {
-            title: "第三章 相互作用——力",
-            points: ["重力与弹力", "摩擦力", "牛顿第三定律", "力的合成和分解", "共点力的平衡"],
-          },
-          {
-            title: "第四章 运动和力的关系",
-            points: ["牛顿第一定律", "实验：探究加速度与力、质量的关系", "牛顿第二定律", "力学单位制", "牛顿运动定律的应用", "超重和失重"],
-          },
+          "第一章 运动的描述",
+          "第二章 匀变速直线运动的研究",
+          "第三章 相互作用——力",
+          "第四章 运动和力的关系",
         ],
       },
       {
         name: "人教版高中物理必修二",
         grade: "高一",
         chapters: [
-          {
-            title: "第五章 抛体运动",
-            points: ["曲线运动", "运动的合成与分解", "实验：探究平抛运动的特点", "抛体运动的规律"],
-          },
-          {
-            title: "第六章 圆周运动",
-            points: ["圆周运动", "向心力", "向心加速度", "生活中的圆周运动"],
-          },
-          {
-            title: "第七章 万有引力与宇宙航行",
-            points: ["行星的运动", "万有引力定律", "万有引力理论的成就", "宇宙航行", "相对论时空观与牛顿力学的局限性"],
-          },
-          {
-            title: "第八章 机械能守恒定律",
-            points: ["功与功率", "重力势能", "动能和动能定理", "机械能守恒定律", "实验：验证机械能守恒定律"],
-          },
+          "第五章 抛体运动",
+          "第六章 圆周运动",
+          "第七章 万有引力与宇宙航行",
+          "第八章 机械能守恒定律",
+        ],
+      },
+      {
+        name: "人教版高中物理必修三",
+        grade: "高二",
+        chapters: [
+          "第九章 静电场及其应用",
+          "第十章 静电场中的能量",
+          "第十一章 电路及其应用",
+          "第十二章 电能 能量守恒定律",
+          "第十三章 电磁感应与电磁波初步",
+        ],
+      },
+      {
+        name: "人教版高中物理选择性必修一",
+        grade: "高二",
+        chapters: [
+          "第一章 动量守恒定律",
+          "第二章 机械振动",
+          "第三章 机械波",
+          "第四章 光",
+        ],
+      },
+      {
+        name: "人教版高中物理选择性必修二",
+        grade: "高二",
+        chapters: [
+          "第一章 安培力与洛伦兹力",
+          "第二章 电磁感应",
+          "第三章 交变电流",
+          "第四章 电磁振荡与电磁波",
+          "第五章 传感器",
+        ],
+      },
+      {
+        name: "人教版高中物理选择性必修三",
+        grade: "高二",
+        chapters: [
+          "第一章 分子动理论",
+          "第二章 气体、固体和液体",
+          "第三章 热力学定律",
+          "第四章 原子结构和波粒二象性",
+          "第五章 原子核",
         ],
       },
     ];
 
     let tbCount = 0;
     let chCount = 0;
-    let kpCount = 0;
 
-    for (const tb of seedData) {
+    for (let tbi = 0; tbi < seedData.length; tbi++) {
+      const tb = seedData[tbi];
       const textbook = await prisma.textbook.create({
-        data: { name: tb.name, grade: tb.grade, sortOrder: tbCount },
+        data: { name: tb.name, grade: tb.grade, sortOrder: tbi },
       });
       tbCount++;
 
       for (let ci = 0; ci < tb.chapters.length; ci++) {
-        const ch = tb.chapters[ci];
-        const chapter = await prisma.chapter.create({
-          data: { textbookId: textbook.id, title: ch.title, sortOrder: ci },
+        await prisma.chapter.create({
+          data: { textbookId: textbook.id, title: tb.chapters[ci], sortOrder: ci },
         });
         chCount++;
-
-        for (let pi = 0; pi < ch.points.length; pi++) {
-          await prisma.knowledgePoint.create({
-            data: { chapterId: chapter.id, name: ch.points[pi], sortOrder: pi },
-          });
-          kpCount++;
-        }
       }
     }
 
     return NextResponse.json({
-      data: { textbooks: tbCount, chapters: chCount, knowledgePoints: kpCount },
+      data: { textbooks: tbCount, chapters: chCount },
     });
   } catch (e) {
     console.error("Seed error:", e);
