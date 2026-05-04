@@ -8,7 +8,6 @@ import { ProblemList } from "@/components/problem-list";
 import type { ProblemItem } from "@/components/problem-list";
 import { ExamBasket } from "@/components/exam-basket";
 import type { BasketItem } from "@/components/exam-basket";
-import { exportProblemsToDocx } from "@/lib/export-docx";
 import { AuthGate } from "@/components/auth/auth-gate";
 
 const RichTextEditor = dynamic(
@@ -222,6 +221,7 @@ export default function HomePage() {
     if (basketItems.length === 0) return;
     setExporting(true);
     try {
+      const { exportProblemsToDocx } = await import("@/lib/export-docx");
       await exportProblemsToDocx(problems, basketItems);
     } catch (e) {
       console.error("Export failed:", e);
