@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
+import { AuthProvider } from "@/components/auth/auth-context";
+import { NavUser } from "@/components/nav-user";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -35,16 +37,13 @@ export default function RootLayout({
               高中物理题库
             </Link>
             <div className="flex items-center gap-6 text-sm">
-              <Link href="/" className="text-gray-600 hover:text-blue-600 transition-colors">
-                题库管理
-              </Link>
-              <Link href="/upload" className="text-gray-600 hover:text-blue-600 transition-colors">
-                上传试卷
-              </Link>
+              <NavUser />
             </div>
           </div>
         </nav>
-        <div className="flex-1">{children}</div>
+        <div className="flex-1">
+          <AuthProvider>{children}</AuthProvider>
+        </div>
       </body>
     </html>
   );

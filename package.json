@@ -23,8 +23,10 @@
     "@tiptap/starter-kit": "^3.22.5",
     "@types/katex": "^0.16.8",
     "adm-zip": "^0.5.17",
+    "bcryptjs": "^3.0.3",
     "docx": "^9.6.1",
     "fast-xml-parser": "^5.7.2",
+    "jose": "^6.2.3",
     "katex": "^0.16.45",
     "next": "16.2.4",
     "prisma": "^7.8.0",
@@ -34,6 +36,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/adm-zip": "^0.5.8",
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

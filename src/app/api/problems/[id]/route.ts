@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getUserFromCookies } from "@/lib/auth";
 
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getUserFromCookies();
+    if (!user) {
+      return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    }
     const { id } = await params;
     const body = await request.json();
-
     const updateData: Record<string, unknown> = {};
 
     if (body.content !== undefined) {
@@ -66,6 +70,10 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const user = await getUserFromCookies();
+    if (!user) {
+      return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    }
     const { id } = await params;
     // Delete junction records first (CASCADE not automatic in SQLite with Prisma)
     await prisma.problemKnowledgePoint.deleteMany({

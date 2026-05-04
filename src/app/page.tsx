@@ -9,6 +9,7 @@ import type { ProblemItem } from "@/components/problem-list";
 import { ExamBasket } from "@/components/exam-basket";
 import type { BasketItem } from "@/components/exam-basket";
 import { exportProblemsToDocx } from "@/lib/export-docx";
+import { AuthGate } from "@/components/auth/auth-gate";
 
 const RichTextEditor = dynamic(
   () => import("@/components/tiptap/rich-text-editor").then((mod) => mod.RichTextEditor),
@@ -233,6 +234,7 @@ export default function HomePage() {
   const QUESTION_TYPES = ["单选", "多选", "实验", "计算"];
 
   return (
+    <AuthGate>
     <div className="h-[calc(100vh-40px)] flex flex-col bg-gray-100 pb-10">
       {/* Main 3-column area */}
       <div className="flex-1 flex gap-0 overflow-hidden">
@@ -412,5 +414,6 @@ export default function HomePage() {
         exporting={exporting}
       />
     </div>
+    </AuthGate>
   );
 }

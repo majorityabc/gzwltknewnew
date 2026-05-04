@@ -80,3 +80,12 @@ model ProblemKnowledgePoint {
   @@id([problemId, knowledgePointId])
   @@map("problem_knowledge_points")
 }
+
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getUserFromCookies } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
   try {
@@ -58,6 +59,10 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await getUserFromCookies();
+    if (!user) {
+      return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    }
     const body = await request.json();
 
     if (!Array.isArray(body)) {

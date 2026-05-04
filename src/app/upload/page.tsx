@@ -6,6 +6,7 @@ import type { Editor } from "@tiptap/react";
 import katex from "katex";
 import type { DocContent, DocParagraph, ParagraphRun } from "@/lib/docx-parser";
 import { docParagraphsToTipTapJson } from "@/lib/tip-tap-converter";
+import { AuthGate } from "@/components/auth/auth-gate";
 import { GlobalToolbar } from "@/components/tiptap/global-toolbar";
 
 const RichTextEditor = dynamic(
@@ -451,6 +452,7 @@ export default function UploadPage() {
   const keptProblems = problems.filter((p) => p.kept);
 
   return (
+    <AuthGate>
     <div className="min-h-screen bg-gray-100">
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-2 py-3">
@@ -778,6 +780,7 @@ export default function UploadPage() {
         )}
       </main>
     </div>
+    </AuthGate>
   );
 }
 
