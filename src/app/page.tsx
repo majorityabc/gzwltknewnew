@@ -8,6 +8,7 @@ import { ProblemList } from "@/components/problem-list";
 import type { ProblemItem } from "@/components/problem-list";
 import { ExamBasket } from "@/components/exam-basket";
 import type { BasketItem } from "@/components/exam-basket";
+import { exportProblemsToDocx } from "@/lib/export-docx";
 
 const RichTextEditor = dynamic(
   () => import("@/components/tiptap/rich-text-editor").then((mod) => mod.RichTextEditor),
@@ -36,6 +37,7 @@ export default function HomePage() {
   // Chapter state
   const [selectedChapterId, setSelectedChapterId] = useState<number | null>(null);
   const [selectedChapterTitle, setSelectedChapterTitle] = useState<string | null>(null);
+  const [selectedTextbookName, setSelectedTextbookName] = useState<string | null>(null);
 
   // Knowledge point state
   const [selectedKpId, setSelectedKpId] = useState<number | null>(null);
@@ -132,13 +134,13 @@ export default function HomePage() {
           order: prev.length,
           preview,
           knowledgePointName: kpName,
-          chapterTitle: "",
-          textbookName: "",
+          chapterTitle: selectedChapterTitle || "",
+          textbookName: selectedTextbookName || "",
         };
         return [...prev, item];
       });
     },
-    [],
+    [selectedChapterTitle, selectedTextbookName],
   );
 
   const basketProblemIds = new Set(basketItems.map((x) => x.problemId));
@@ -214,14 +216,19 @@ export default function HomePage() {
     }
   }, [selectedProblemId]);
 
-  // Export Word (placeholder for Step 5)
+  // Export Word (Step 5)
   const handleExport = useCallback(async () => {
     if (basketItems.length === 0) return;
     setExporting(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    alert("Word 导出功能将在第 5 步实现");
-    setExporting(false);
-  }, [basketItems]);
+    try {
+      await exportProblemsToDocx(problems, basketItems);
+    } catch (e) {
+      console.error("Export failed:", e);
+      alert("导出失败，请重试");
+    } finally {
+      setExporting(false);
+    }
+  }, [basketItems, problems]);
 
   const QUESTION_TYPES = ["单选", "多选", "实验", "计算"];
 
@@ -234,6 +241,7 @@ export default function HomePage() {
           <ChapterTree
             selectedChapterId={selectedChapterId}
             onSelectChapter={handleSelectChapter}
+            onTextbookChange={(_, name) => setSelectedTextbookName(name)}
           />
         </div>
 

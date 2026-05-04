@@ -10,6 +10,7 @@
     "db:seed": "npx tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@hungknguyen/docx-math-converter": "^1.1.4",
     "@libsql/client": "^0.17.3",
     "@prisma/adapter-libsql": "^7.8.0",
     "@prisma/client": "^7.8.0",
@@ -22,6 +23,7 @@
     "@tiptap/starter-kit": "^3.22.5",
     "@types/katex": "^0.16.8",
     "adm-zip": "^0.5.17",
+    "docx": "^9.6.1",
     "fast-xml-parser": "^5.7.2",
     "katex": "^0.16.45",
     "next": "16.2.4",

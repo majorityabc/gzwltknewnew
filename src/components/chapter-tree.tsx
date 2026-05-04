@@ -17,9 +17,10 @@ interface Chapter {
 interface ChapterTreeProps {
   selectedChapterId: number | null;
   onSelectChapter: (id: number, title: string) => void;
+  onTextbookChange?: (id: number, name: string) => void;
 }
 
-export function ChapterTree({ selectedChapterId, onSelectChapter }: ChapterTreeProps) {
+export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChange }: ChapterTreeProps) {
   const [textbooks, setTextbooks] = useState<Textbook[]>([]);
   const [selectedTextbookId, setSelectedTextbookId] = useState<number | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -55,6 +56,10 @@ export function ChapterTree({ selectedChapterId, onSelectChapter }: ChapterTreeP
           onChange={(e) => {
             const id = e.target.value ? Number(e.target.value) : null;
             setSelectedTextbookId(id);
+            if (id) {
+              const tb = textbooks.find((t) => t.id === id);
+              if (tb) onTextbookChange?.(tb.id, tb.name);
+            }
           }}
           className="w-full border rounded px-2 py-1.5 text-sm bg-white"
         >
