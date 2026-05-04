@@ -28,6 +28,9 @@ export function KnowledgePointList({
   const [showDropdown, setShowDropdown] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [addingKp, setAddingKp] = useState(false);
+  const [newKpName, setNewKpName] = useState("");
+  const [savingKp, setSavingKp] = useState(false);
 
   // Load KPs for selected chapter
   const loadChapterKps = useCallback(async () => {
@@ -62,6 +65,25 @@ export function KnowledgePointList({
       setDeletingId(null);
     }
   }, [selectedKpId, onSelectKnowledgePoint]);
+
+  const handleAddKp = useCallback(async () => {
+    if (!newKpName.trim() || !chapterId) return;
+    setSavingKp(true);
+    try {
+      await fetch("/api/knowledge-points", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapterId, name: newKpName.trim() }),
+      });
+      setNewKpName("");
+      setAddingKp(false);
+      await loadChapterKps();
+    } catch {
+      // silent
+    } finally {
+      setSavingKp(false);
+    }
+  }, [newKpName, chapterId, loadChapterKps]);
 
   const doSearch = useCallback(async (query: string) => {
     if (!query.trim()) {
@@ -159,6 +181,45 @@ export function KnowledgePointList({
           )}
         </div>
       </div>
+
+      {/* Add knowledge point button (only when chapter selected) */}
+      {chapterId && (
+        <div className="px-3 py-2 border-b">
+          {addingKp ? (
+            <div className="flex gap-1">
+              <input
+                type="text"
+                value={newKpName}
+                onChange={(e) => setNewKpName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleAddKp(); }}
+                placeholder="输入知识点名称"
+                className="flex-1 border rounded px-2 py-1 text-xs"
+                autoFocus
+              />
+              <button
+                onClick={handleAddKp}
+                disabled={savingKp || !newKpName.trim()}
+                className="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 disabled:bg-gray-300 transition-colors"
+              >
+                {savingKp ? "..." : "确认"}
+              </button>
+              <button
+                onClick={() => { setAddingKp(false); setNewKpName(""); }}
+                className="px-2 py-1 text-gray-500 text-xs border rounded hover:bg-gray-50 transition-colors"
+              >
+                取消
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setAddingKp(true)}
+              className="w-full text-xs px-3 py-1.5 text-blue-600 hover:bg-blue-50 border border-dashed border-blue-300 rounded transition-colors"
+            >
+              + 添加知识点
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Chapter KPs or empty state */}
       <div className="flex-1 overflow-y-auto">

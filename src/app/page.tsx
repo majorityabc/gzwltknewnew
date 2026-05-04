@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { ChapterTree } from "@/components/chapter-tree";
 import { KnowledgePointList } from "@/components/knowledge-point-list";
@@ -37,6 +37,7 @@ export default function HomePage() {
   // Chapter state
   const [selectedChapterId, setSelectedChapterId] = useState<number | null>(null);
   const [selectedChapterTitle, setSelectedChapterTitle] = useState<string | null>(null);
+  const [selectedTextbookId, setSelectedTextbookId] = useState<number | null>(null);
   const [selectedTextbookName, setSelectedTextbookName] = useState<string | null>(null);
 
   // Knowledge point state
@@ -55,6 +56,19 @@ export default function HomePage() {
   const [editQuestionType, setEditQuestionType] = useState("");
   const [editSourceDate, setEditSourceDate] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Edit page: notes & KP management
+  const [editNotes, setEditNotes] = useState("");
+  const [savingNotes, setSavingNotes] = useState(false);
+  const [kpSearchQuery, setKpSearchQuery] = useState("");
+  const [kpSearchResults, setKpSearchResults] = useState<{ id: number; name: string; chapterId: number; chapter?: { id: number; title: string; textbookId: number } }[]>([]);
+  const [showKpSearch, setShowKpSearch] = useState(false);
+  const [addingKp, setAddingKp] = useState(false);
+  const [kpError, setKpError] = useState<string | null>(null);
+  const [notesSaved, setNotesSaved] = useState(false);
+  const [notesEditing, setNotesEditing] = useState(false);
+  const [kpSearching, setKpSearching] = useState(false);
+  const kpSearchRef = useRef<HTMLDivElement>(null);
 
   // Basket state
   const [basketItems, setBasketItems] = useState<BasketItem[]>([]);
@@ -114,6 +128,14 @@ export default function HomePage() {
       setEditDifficulty(p.difficulty);
       setEditQuestionType(p.questionType || "");
       setEditSourceDate(p.sourceDate || "");
+      setEditNotes(p.remarks || "");
+      setNotesEditing(false);
+      setNotesSaved(false);
+      setKpSearchQuery("");
+      setKpSearchResults([]);
+      setShowKpSearch(false);
+      setKpError(null);
+      setKpSearching(false);
     }
   }, [problems]);
 
@@ -216,6 +238,164 @@ export default function HomePage() {
     }
   }, [selectedProblemId]);
 
+  // Edit page: save notes
+  const handleSaveNotes = useCallback(async () => {
+    if (!selectedProblemId) return;
+    setSavingNotes(true);
+    const res = await fetch(`/api/problems/${selectedProblemId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ remarks: editNotes }),
+    });
+    if (res.ok) {
+      setSelectedProblem((prev) => prev ? { ...prev, remarks: editNotes } : null);
+      setProblems((prev) => prev.map((p) => p.id === selectedProblemId ? { ...p, remarks: editNotes } : p));
+      setNotesEditing(false);
+      setNotesSaved(true);
+      setTimeout(() => setNotesSaved(false), 2000);
+    }
+    setSavingNotes(false);
+  }, [selectedProblemId, editNotes]);
+
+  // Edit page: search KPs
+  const handleSearchKps = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setKpSearchResults([]);
+      return;
+    }
+    setKpSearchResults([]);
+    setKpSearching(true);
+    try {
+      const res = await fetch(`/api/knowledge-points?search=${encodeURIComponent(query)}`);
+      const d = await res.json();
+      setKpSearchResults(d.data || []);
+    } finally {
+      setKpSearching(false);
+    }
+  }, []);
+
+  // Edit page: add KP to problem
+  const handleAddKpToProblem = useCallback(async (kpId: number) => {
+    const pid = selectedProblem?.id ?? selectedProblemId;
+    if (!pid) return;
+    setAddingKp(true);
+    setKpError(null);
+    try {
+      const res = await fetch(`/api/problems/${pid}/knowledge-points`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ knowledgePointId: kpId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "请求失败" }));
+        setKpError(err.error || `添加失败 (${res.status})`);
+        return;
+      }
+      // Refetch to get updated knowledgePoints
+      if (selectedKpId) {
+        const refreshRes = await fetch(`/api/problems?knowledgePointId=${selectedKpId}`);
+        const refreshData = await refreshRes.json();
+        const list = refreshData.data || [];
+        setProblems(list);
+        const updated = list.find((p: ProblemItem) => p.id === pid);
+        if (updated) setSelectedProblem(updated);
+      }
+      setKpSearchQuery("");
+      setKpSearchResults([]);
+      setShowKpSearch(false);
+    } catch (e) {
+      setKpError(e instanceof Error ? e.message : "网络错误");
+    } finally {
+      setAddingKp(false);
+    }
+  }, [selectedProblem, selectedProblemId, selectedKpId]);
+
+  // Edit page: create new KP and add to problem in one step
+  const handleCreateAndAddKp = useCallback(async () => {
+    const pid = selectedProblem?.id ?? selectedProblemId;
+    if (!pid || !kpSearchQuery.trim() || !selectedChapterId) return;
+    setAddingKp(true);
+    setKpError(null);
+    try {
+      // 1. Create the KP
+      const createRes = await fetch("/api/knowledge-points", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapterId: selectedChapterId, name: kpSearchQuery.trim() }),
+      });
+      if (!createRes.ok) {
+        const err = await createRes.json().catch(() => ({ error: "创建失败" }));
+        setKpError(err.error || "创建知识点失败");
+        return;
+      }
+      const createData = await createRes.json();
+      const newKpId = createData.data.id;
+      // 2. Add it to the problem
+      const addRes = await fetch(`/api/problems/${pid}/knowledge-points`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ knowledgePointId: newKpId }),
+      });
+      if (!addRes.ok) {
+        setKpError("添加失败");
+        return;
+      }
+      // 3. Refetch to update state
+      if (selectedKpId) {
+        const refreshRes = await fetch(`/api/problems?knowledgePointId=${selectedKpId}`);
+        const refreshData = await refreshRes.json();
+        const list = refreshData.data || [];
+        setProblems(list);
+        const updated = list.find((p: ProblemItem) => p.id === pid);
+        if (updated) setSelectedProblem(updated);
+      }
+      setKpSearchQuery("");
+      setKpSearchResults([]);
+      setShowKpSearch(false);
+    } catch (e) {
+      setKpError(e instanceof Error ? e.message : "网络错误");
+    } finally {
+      setAddingKp(false);
+    }
+  }, [selectedProblem, selectedProblemId, selectedChapterId, selectedKpId, kpSearchQuery]);
+
+  // Edit page: remove KP from problem
+  const handleRemoveKpFromProblem = useCallback(async (kpId: number) => {
+    const pid = selectedProblem?.id ?? selectedProblemId;
+    if (!pid) return;
+    setKpError(null);
+    const res = await fetch(`/api/problems/${pid}/knowledge-points/${kpId}`, {
+      method: "DELETE",
+    }).catch(() => null);
+    if (!res || !res.ok) return;
+    if (selectedKpId) {
+      const refreshRes = await fetch(`/api/problems?knowledgePointId=${selectedKpId}`);
+      const refreshData = await refreshRes.json();
+      const list = refreshData.data || [];
+      setProblems(list);
+      const updated = list.find((p: ProblemItem) => p.id === pid);
+      if (updated) setSelectedProblem(updated);
+      else {
+        setSelectedProblem(null);
+        setSelectedProblemId(null);
+      }
+    }
+  }, [selectedProblem, selectedProblemId, selectedKpId]);
+
+  // Close KP search on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (kpSearchRef.current && !kpSearchRef.current.contains(e.target as Node)) {
+        setShowKpSearch(false);
+        setKpSearchQuery("");
+        setKpSearchResults([]);
+        setKpSearching(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
   // Export Word (Step 5)
   const handleExport = useCallback(async () => {
     if (basketItems.length === 0) return;
@@ -243,7 +423,7 @@ export default function HomePage() {
           <ChapterTree
             selectedChapterId={selectedChapterId}
             onSelectChapter={handleSelectChapter}
-            onTextbookChange={(_, name) => setSelectedTextbookName(name)}
+            onTextbookChange={(id, name) => { setSelectedTextbookId(id); setSelectedTextbookName(name); }}
           />
         </div>
 
@@ -285,22 +465,99 @@ export default function HomePage() {
                   </div>
 
                   {/* Metadata editor */}
-                  <div className="bg-white border rounded-lg p-4 space-y-3">
+                  <div className="bg-white border rounded-lg p-4 space-y-4">
                     <h4 className="text-sm font-semibold text-gray-700">题目信息</h4>
 
-                    {/* Knowledge points display */}
+                    {/* Knowledge points — editable */}
                     <div>
-                      <span className="text-xs text-gray-400">知识点：</span>
-                      <div className="flex flex-wrap gap-1 mt-1">
+                      <div className="text-xs text-gray-400 mb-1">知识点：</div>
+                      <div className="flex flex-wrap gap-1 mb-2">
                         {selectedProblem.knowledgePoints.map((kp) => (
                           <span
                             key={kp.knowledgePoint.id}
-                            className="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded"
+                            className="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded inline-flex items-center gap-1 group"
                           >
                             {kp.knowledgePoint.name}
+                            <button
+                              onClick={() => handleRemoveKpFromProblem(kp.knowledgePoint.id)}
+                              className="text-blue-400 hover:text-red-500 leading-none opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="移除此标签"
+                            >
+                              ×
+                            </button>
                           </span>
                         ))}
+                        {!showKpSearch && (
+                          <button
+                            onClick={() => setShowKpSearch(true)}
+                            className="text-xs px-2 py-0.5 text-blue-500 hover:bg-blue-50 rounded border border-dashed border-blue-300 transition-colors"
+                          >
+                            + 添加标签
+                          </button>
+                        )}
                       </div>
+                      {showKpSearch && (
+                        <div ref={kpSearchRef}>
+                          <div className="flex gap-1 mb-1">
+                            <input
+                              type="text"
+                              value={kpSearchQuery}
+                              onChange={(e) => setKpSearchQuery(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter") handleSearchKps(kpSearchQuery); }}
+                              placeholder="搜索知识点..."
+                              className="flex-1 border rounded px-2 py-1 text-xs"
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => handleSearchKps(kpSearchQuery)}
+                              className="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 transition-colors"
+                            >
+                              搜索
+                            </button>
+                          </div>
+                          {kpSearchResults.length > 0 && (
+                            <div className="border rounded max-h-32 overflow-y-auto">
+                              {kpSearchResults.map((kp) => {
+                                const alreadyAdded = selectedProblem.knowledgePoints.some(
+                                  (pkp) => pkp.knowledgePoint.id === kp.id
+                                );
+                                return (
+                                  <button
+                                    key={kp.id}
+                                    onClick={() => handleAddKpToProblem(kp.id)}
+                                    disabled={alreadyAdded || addingKp}
+                                    className={`w-full text-left px-2 py-1 text-xs border-b last:border-b-0 transition-colors ${
+                                      alreadyAdded
+                                        ? "text-gray-300 cursor-not-allowed bg-gray-50"
+                                        : "hover:bg-blue-50 text-gray-700"
+                                    }`}
+                                  >
+                                    {kp.name}
+                                    {kp.chapter && (
+                                      <span className="text-gray-400 ml-1">— {kp.chapter.title}</span>
+                                    )}
+                                    {alreadyAdded && <span className="text-gray-300 ml-1">已添加</span>}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {kpSearchResults.length === 0 && !kpSearching && kpSearchQuery.trim() && !addingKp && selectedChapterId && (
+                            <button
+                              onClick={handleCreateAndAddKp}
+                              className="mt-1 w-full text-left px-2 py-1 text-xs text-green-600 hover:bg-green-50 border border-dashed border-green-300 rounded transition-colors"
+                            >
+                              + 创建知识点「{kpSearchQuery.trim()}」
+                            </button>
+                          )}
+                          {kpError && (
+                            <div className="mt-1 text-xs text-red-500">{kpError}</div>
+                          )}
+                          {addingKp && (
+                            <div className="mt-1 text-xs text-gray-400">添加中...</div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-3 gap-3">
@@ -342,6 +599,44 @@ export default function HomePage() {
                       </label>
                     </div>
 
+                    {/* Notes */}
+                    <div>
+                      <div className="text-xs text-gray-400 mb-1">备注：</div>
+                      <textarea
+                        value={editNotes}
+                        onChange={(e) => setEditNotes(e.target.value)}
+                        placeholder="暂无备注，点击下方按钮编辑..."
+                        rows={3}
+                        readOnly={!notesEditing}
+                        className={`w-full border rounded px-2 py-1.5 text-xs resize-y transition-colors ${
+                          notesEditing
+                            ? "bg-white border-gray-300"
+                            : "bg-gray-50 border-gray-200 cursor-default"
+                        }`}
+                      />
+                      <div className="flex items-center gap-2 mt-1.5">
+                        {notesEditing ? (
+                          <button
+                            onClick={handleSaveNotes}
+                            disabled={savingNotes}
+                            className="text-xs px-3 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600 disabled:bg-gray-300 transition-colors"
+                          >
+                            {savingNotes ? "保存中..." : "保存备注"}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => { setNotesEditing(true); setNotesSaved(false); }}
+                            className="text-xs px-3 py-1 text-gray-500 border rounded hover:bg-gray-50 transition-colors"
+                          >
+                            编辑备注
+                          </button>
+                        )}
+                        {notesSaved && !notesEditing && (
+                          <span className="text-xs text-green-600">✓ 已保存</span>
+                        )}
+                      </div>
+                    </div>
+
                     {/* Actions */}
                     <div className="flex items-center gap-3 pt-2 border-t">
                       <button
@@ -375,11 +670,11 @@ export default function HomePage() {
                   basketProblemIds={basketProblemIds}
                   selectedKpName={selectedKpName}
                   chapterId={selectedChapterId}
+                  textbookId={selectedTextbookId}
                   selectedKpId={selectedKpId}
                   selectedChapterTitle={selectedChapterTitle}
                   onSelectProblem={handleSelectProblem}
                   onToggleBasket={handleToggleBasket}
-                  onDelete={handleDelete}
                   onRefresh={refreshProblems}
                 />
               );
