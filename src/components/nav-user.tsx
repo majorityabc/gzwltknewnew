@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useAuth } from "./auth/auth-context";
 
 export function NavUser() {
-  const { user, logout } = useAuth();
+  const { user, signOut } = useAuth();
 
   return (
     <div className="flex items-center gap-4 text-sm">
@@ -20,9 +20,9 @@ export function NavUser() {
       {user && (
         <>
           <span className="text-gray-400">|</span>
-          <span className="text-gray-500">{user.username}</span>
+          <span className="text-gray-500">{user.email}</span>
           <button
-            onClick={() => logout()}
+            onClick={() => signOut()}
             className="text-gray-400 hover:text-red-500 transition-colors"
           >
             退出

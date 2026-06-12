@@ -9,72 +9,59 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
-
-interface User {
-  id: number;
-  username: string;
-}
+import { supabase } from "@/lib/supabase-client";
+import type { User, Session } from "@supabase/supabase-js";
 
 interface AuthContextValue {
   user: User | null;
+  session: Session | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<{ error?: string }>;
-  register: (username: string, password: string) => Promise<{ error?: string }>;
-  logout: () => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
+  signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then((r) => r.json())
-      .then((d) => setUser(d.data || null))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+    });
+
+    return () => data.subscription.unsubscribe();
   }, []);
 
-  const login = useCallback(
-    async (username: string, password: string) => {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const d = await res.json();
-      if (d.error) return { error: d.error };
-      setUser(d.data);
-      return {};
-    },
-    [],
-  );
+  const signInWithGoogle = useCallback(async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+        queryParams: {
+          access_type: "offline",
+          prompt: "consent",
+        },
+      },
+    });
+  }, []);
 
-  const register = useCallback(
-    async (username: string, password: string) => {
-      const res = await fetch("/api/auth/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const d = await res.json();
-      if (d.error) return { error: d.error };
-      setUser(d.data);
-      return {};
-    },
-    [],
-  );
-
-  const logout = useCallback(async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
-    setUser(null);
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, login, register, logout }),
-    [user, loading, login, register, logout],
+    () => ({ user, session, loading, signInWithGoogle, signOut }),
+    [user, session, loading, signInWithGoogle, signOut],
   );
 
   return (

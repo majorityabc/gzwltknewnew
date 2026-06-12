@@ -1,8 +1,6 @@
-import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
-import { jwtVerify } from "jose";
+import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
 
-const COOKIE_NAME = "auth-token";
 const PUBLIC_API_PREFIXES = ["/api/auth/"];
 
 function isPublicApiRoute(pathname: string): boolean {
@@ -10,28 +8,45 @@ function isPublicApiRoute(pathname: string): boolean {
 }
 
 export async function proxy(request: NextRequest) {
+  let response = NextResponse.next({ request });
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            response.cookies.set(name, value, options),
+          );
+        },
+      },
+    },
+  );
+
+  await supabase.auth.getUser();
+
   const { pathname } = request.nextUrl;
-  if (!pathname.startsWith("/api/")) return NextResponse.next();
-  if (isPublicApiRoute(pathname)) return NextResponse.next();
-  if (request.method === "GET") return NextResponse.next();
 
-  const token = request.cookies.get(COOKIE_NAME)?.value;
-  if (!token) {
-    return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  if (
+    pathname.startsWith("/api/") &&
+    !isPublicApiRoute(pathname) &&
+    request.method !== "GET"
+  ) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      return NextResponse.json({ error: "请先登录" }, { status: 401 });
+    }
   }
 
-  try {
-    const secret = new TextEncoder().encode(process.env.JWT_SECRET);
-    await jwtVerify(token, secret);
-    return NextResponse.next();
-  } catch {
-    return NextResponse.json(
-      { error: "登录已过期，请重新登录" },
-      { status: 401 },
-    );
-  }
+  return response;
 }
 
 export const config = {
-  matcher: ["/api/:path*"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+  ],
 };
