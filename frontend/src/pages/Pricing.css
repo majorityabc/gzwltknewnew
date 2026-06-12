@@ -1,0 +1,462 @@
+/* ===== Pricing Page - Modern SaaS Design ===== */
+
+.pricing-layout {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #f6f8fb 0%, #ffffff 100%);
+}
+
+/* Header */
+.pricing-header {
+  background: rgba(255, 255, 255, 0.85) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid #eee;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  padding: 0 24px !important;
+}
+
+.pricing-header-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 64px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.pricing-logo {
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #1a1a2e;
+  user-select: none;
+}
+
+/* Content */
+.pricing-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ===== Hero ===== */
+.pricing-hero {
+  text-align: center;
+  padding: 72px 0 48px;
+}
+
+.pricing-hero h1 {
+  font-size: 44px;
+  font-weight: 800;
+  color: #1a1a2e;
+  margin-bottom: 12px;
+  letter-spacing: -1px;
+  line-height: 1.2;
+}
+
+.pricing-hero-sub {
+  font-size: 18px;
+  color: #666;
+  margin-bottom: 40px;
+  line-height: 1.6;
+}
+
+/* ===== Toggle ===== */
+.pricing-toggle-wrapper {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.pricing-toggle-wrapper .ant-segmented {
+  background: #f0f0f0;
+  border-radius: 12px;
+  padding: 4px;
+}
+
+.pricing-toggle-wrapper .ant-segmented-item {
+  padding: 6px 24px;
+  font-weight: 500;
+  font-size: 14px;
+  transition: all 0.2s ease;
+  border-radius: 10px;
+}
+
+.pricing-toggle-wrapper .ant-segmented-item-selected {
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  color: #1677ff;
+}
+
+.pricing-toggle-wrapper .ant-segmented-thumb {
+  border-radius: 10px;
+}
+
+/* ===== Cards Grid ===== */
+.pricing-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  padding: 20px 0 60px;
+  align-items: start;
+}
+
+/* ===== Card ===== */
+.pricing-card {
+  border-radius: 16px;
+  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1.5px solid #e8ecf1;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  overflow: visible;
+}
+
+.pricing-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.10);
+}
+
+.pricing-card.checking-out {
+  transform: scale(1.03);
+  z-index: 10;
+  border-color: #1677ff;
+  box-shadow: 0 8px 40px rgba(22, 119, 255, 0.18);
+}
+
+.pricing-card.highlighted {
+  border-color: #1677ff;
+  box-shadow: 0 8px 32px rgba(22, 119, 255, 0.14);
+  position: relative;
+  transform: scale(1.03);
+  z-index: 5;
+}
+
+.pricing-card.highlighted:hover {
+  transform: scale(1.03) translateY(-4px);
+  box-shadow: 0 20px 48px rgba(22, 119, 255, 0.20);
+}
+
+.pricing-card.highlighted.checking-out {
+  transform: scale(1.05);
+  z-index: 10;
+}
+
+.pricing-card .ant-card-head {
+  border-bottom: none;
+  padding: 28px 28px 0;
+}
+
+.pricing-card .ant-card-body {
+  padding: 16px 28px 32px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Card Title */
+.pricing-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.pricing-card-icon {
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #f0f5ff;
+  color: #1677ff;
+}
+
+.pricing-card.highlighted .pricing-card-icon {
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  color: #fff;
+}
+
+.pricing-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 100px;
+  margin-left: 4px;
+}
+
+/* ===== Price ===== */
+.pricing-card-price {
+  display: flex;
+  align-items: baseline;
+  margin: 12px 0 0;
+}
+
+.price-symbol {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.price-amount {
+  font-size: 52px;
+  font-weight: 800;
+  color: #1a1a2e;
+  line-height: 1;
+  margin: 0 3px;
+  letter-spacing: -2px;
+}
+
+.price-period {
+  font-size: 16px;
+  color: #999;
+  font-weight: 500;
+}
+
+.pricing-savings {
+  font-size: 13px;
+  color: #1677ff;
+  font-weight: 500;
+  margin-top: 4px;
+  min-height: 20px;
+}
+
+.pricing-card-desc {
+  color: #888;
+  font-size: 14px;
+  margin: 12px 0 20px;
+  line-height: 1.5;
+}
+
+/* ===== CTA ===== */
+.pricing-cta {
+  height: 48px;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 12px;
+  transition: all 0.25s ease;
+}
+
+.pricing-cta-paypal {
+  background: linear-gradient(135deg, #1677ff 0%, #4096ff 100%);
+  border: none;
+  color: #fff;
+}
+
+.pricing-cta-paypal:hover {
+  background: linear-gradient(135deg, #0958d9 0%, #1677ff 100%) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(22, 119, 255, 0.3);
+}
+
+.pricing-card.highlighted .pricing-cta {
+  background: linear-gradient(135deg, #1677ff 0%, #0958d9 100%);
+  border: none;
+  color: #fff;
+}
+
+.pricing-card.highlighted .pricing-cta:hover {
+  background: linear-gradient(135deg, #0958d9 0%, #003eb3 100%) !important;
+  box-shadow: 0 6px 24px rgba(22, 119, 255, 0.35);
+}
+
+.pricing-cta-sub {
+  text-align: center;
+  font-size: 12px;
+  color: #bbb;
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+
+/* ===== PayPal Checkout ===== */
+.pricing-paypal-wrapper {
+  margin-bottom: 4px;
+}
+
+.pricing-paypal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: #f9fafb;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #555;
+}
+
+.pricing-paypal-amount {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+/* ===== Feature List ===== */
+.pricing-features {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border-top: 1px solid #f0f0f0;
+  padding-top: 20px;
+  flex: 1;
+}
+
+.pricing-features li {
+  display: flex;
+  align-items: center;
+  padding: 9px 0;
+  font-size: 14px;
+  color: #333;
+  line-height: 1.5;
+}
+
+.pricing-features li.excluded {
+  color: #bbb;
+  text-decoration: line-through;
+  text-decoration-color: #ddd;
+}
+
+/* ===== FAQ ===== */
+.pricing-faq {
+  padding: 64px 0;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.pricing-faq h2 {
+  text-align: center;
+  font-size: 34px;
+  font-weight: 800;
+  color: #1a1a2e;
+  margin-bottom: 48px;
+  letter-spacing: -0.5px;
+}
+
+.pricing-faq-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+.pricing-faq-item {
+  background: #f9fafb;
+  border-radius: 14px;
+  padding: 24px 28px;
+  border: 1px solid #f0f0f0;
+  transition: box-shadow 0.2s ease;
+}
+
+.pricing-faq-item:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+}
+
+.pricing-faq-item h4 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin-bottom: 10px;
+}
+
+.pricing-faq-item p {
+  font-size: 14px;
+  color: #666;
+  line-height: 1.7;
+  margin: 0;
+}
+
+/* ===== Footer CTA ===== */
+.pricing-footer-cta {
+  text-align: center;
+  padding: 32px 0 80px;
+}
+
+.pricing-footer-cta h2 {
+  font-size: 34px;
+  font-weight: 800;
+  color: #1a1a2e;
+  margin-bottom: 12px;
+  letter-spacing: -0.5px;
+}
+
+.pricing-footer-cta p {
+  font-size: 16px;
+  color: #666;
+  margin-bottom: 28px;
+}
+
+.pricing-footer-cta .ant-btn {
+  height: 50px;
+  padding: 0 40px;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 14px;
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 960px) {
+  .pricing-cards {
+    grid-template-columns: 1fr;
+    max-width: 440px;
+    margin: 0 auto;
+  }
+
+  .pricing-card.highlighted {
+    transform: none;
+  }
+
+  .pricing-card.highlighted:hover {
+    transform: translateY(-4px);
+  }
+
+  .pricing-faq-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pricing-hero h1 {
+    font-size: 34px;
+  }
+
+  .pricing-hero-sub {
+    font-size: 16px;
+  }
+}
+
+@media (max-width: 480px) {
+  .pricing-hero {
+    padding: 48px 0 32px;
+  }
+
+  .pricing-hero h1 {
+    font-size: 28px;
+  }
+
+  .pricing-content {
+    padding: 0 16px;
+  }
+
+  .pricing-card .ant-card-head {
+    padding: 20px 20px 0;
+  }
+
+  .pricing-card .ant-card-body {
+    padding: 12px 20px 24px;
+  }
+
+  .price-amount {
+    font-size: 42px;
+  }
+
+  .pricing-faq h2,
+  .pricing-footer-cta h2 {
+    font-size: 28px;
+  }
+
+  .pricing-toggle-wrapper .ant-segmented-item {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+}

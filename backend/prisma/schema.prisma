@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Chapter {
+  id          Int        @id @default(autoincrement())
+  name        String
+  parentId    Int?       @map("parent_id")
+  sortOrder   Int?       @map("sort_order")
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  parent      Chapter?   @relation("ChapterHierarchy", fields: [parentId], references: [id])
+  children    Chapter[]  @relation("ChapterHierarchy")
+  questions   Question[]
+  knowledgePoints KnowledgePoint[]
+
+  @@map("chapters")
+}
+
+model KnowledgePoint {
+  id          Int        @id @default(autoincrement())
+  name        String
+  chapterId   Int?       @map("chapter_id")
+  description String?
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  chapter     Chapter?   @relation(fields: [chapterId], references: [id])
+  questionKnowledgePoints QuestionKnowledgePoint[]
+
+  @@map("knowledge_points")
+}
+
+model Question {
+  id          Int        @id @default(autoincrement())
+  content     String
+  plainText   String?    @map("plain_text")
+  questionType String?   @map("question_type")
+  difficulty  String?
+  chapterId   Int?       @map("chapter_id")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  chapter     Chapter?   @relation(fields: [chapterId], references: [id])
+  questionKnowledgePoints QuestionKnowledgePoint[]
+  questionTags QuestionTag[]
+  images      Image[]
+
+  @@map("questions")
+}
+
+model QuestionKnowledgePoint {
+  questionId        Int @map("question_id")
+  knowledgePointId  Int @map("knowledge_point_id")
+
+  question          Question       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  knowledgePoint    KnowledgePoint @relation(fields: [knowledgePointId], references: [id], onDelete: Cascade)
+
+  @@id([questionId, knowledgePointId])
+  @@map("question_knowledge_points")
+}
+
+model Tag {
+  id          Int        @id @default(autoincrement())
+  name        String     @unique
+  color       String?
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  questionTags QuestionTag[]
+
+  @@map("tags")
+}
+
+model QuestionTag {
+  questionId  Int @map("question_id")
+  tagId       Int @map("tag_id")
+
+  question    Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  tag         Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([questionId, tagId])
+  @@map("question_tags")
+}
+
+model Image {
+  id          Int        @id @default(autoincrement())
+  questionId  Int?       @map("question_id")
+  url         String
+  filename    String?
+  size        Int?
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  question    Question?  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("images")
+}
