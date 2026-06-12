@@ -17,6 +17,12 @@ export function NavUser() {
       >
         上传试卷
       </Link>
+      <Link
+        href="/pricing"
+        className="text-gray-600 hover:text-blue-600 transition-colors"
+      >
+        定价
+      </Link>
       {user && (
         <>
           <span className="text-gray-400">|</span>
