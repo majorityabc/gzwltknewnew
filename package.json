@@ -1,0 +1,51 @@
+{
+  "name": "physics-problem-bank",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "db:seed": "npx tsx prisma/seed.ts",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@hungknguyen/docx-math-converter": "^1.1.4",
+    "@libsql/client": "^0.17.3",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@tiptap/extension-image": "^3.22.5",
+    "@tiptap/extension-subscript": "^3.22.5",
+    "@tiptap/extension-superscript": "^3.22.5",
+    "@tiptap/extension-underline": "^3.22.5",
+    "@tiptap/pm": "^3.22.5",
+    "@tiptap/react": "^3.22.5",
+    "@tiptap/starter-kit": "^3.22.5",
+    "@types/katex": "^0.16.8",
+    "adm-zip": "^0.5.17",
+    "bcryptjs": "^3.0.3",
+    "docx": "^9.6.1",
+    "fast-xml-parser": "^5.7.2",
+    "jose": "^6.2.3",
+    "katex": "^0.16.45",
+    "next": "16.2.4",
+    "prisma": "^7.8.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/adm-zip": "^0.5.8",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.4",
+    "pg": "^8.20.0",
+    "tailwindcss": "^4",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}

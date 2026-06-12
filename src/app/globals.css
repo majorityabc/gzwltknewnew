@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* KaTeX root size matching body text */
+.katex {
+  font-size: 1.1em !important;
+}
+
+/* TipTap editor styles */
+.tiptap-editor {
+  min-height: 300px;
+  word-break: normal;
+  overflow-wrap: break-word;
+  line-height: 1.8;
+}
+
+.tiptap-editor * {
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.tiptap-editor p {
+  margin: 0.5em 0;
+}
+
+.tiptap-editor sup {
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 1;
+}
+
+.tiptap-editor sub {
+  font-size: 0.75em;
+  vertical-align: sub;
+  line-height: 1;
+}
+
+.tiptap-editor span {
+  word-break: normal;
+}
+
+/* Inline read-only content inside problem cards */
+.problem-card-content .tiptap-editor {
+  min-height: auto;
+  padding: 0;
+  line-height: 1.6;
+  font-size: 0.875rem;
+}
+
+/* Inline math node styles */
+.inline-math {
+  display: inline;
+}
+
+.inline-math .katex {
+  font-size: 1em !important;
+}
+
+.inline-math.editing {
+  display: inline-block;
+}
+
+/* Formula placeholder images (from Word/WPS paste) */
+img.formula-placeholder {
+  display: inline-block;
+  min-width: 40px;
+  height: 1.4em;
+  padding: 0 6px;
+  margin: 0 2px;
+  background: #fef3c7;
+  border: 1px dashed #d97706;
+  border-radius: 3px;
+  cursor: pointer;
+  vertical-align: middle;
+  font-size: 0.85em;
+  line-height: 1.4em;
+  color: #92400e;
+  box-sizing: border-box;
+}
+
+img.formula-placeholder:hover {
+  background: #fde68a;
+  border-color: #b45309;
+}

@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Textbook {
+  id        Int       @id @default(autoincrement())
+  name      String
+  grade     String?
+  sortOrder Int       @default(0) @map("sort_order")
+  createdAt DateTime  @default(now()) @map("created_at")
+  chapters  Chapter[]
+
+  @@map("textbooks")
+}
+
+model Chapter {
+  id              Int              @id @default(autoincrement())
+  textbookId      Int              @map("textbook_id")
+  parentId        Int?             @map("parent_id")
+  title           String
+  sortOrder       Int              @default(0) @map("sort_order")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  textbook        Textbook         @relation(fields: [textbookId], references: [id])
+  parent          Chapter?         @relation("ChapterTree", fields: [parentId], references: [id])
+  children        Chapter[]        @relation("ChapterTree")
+  knowledgePoints KnowledgePoint[]
+  lessons         Lesson[]
+
+  @@map("chapters")
+}
+
+model Lesson {
+  id         Int      @id @default(autoincrement())
+  chapterId  Int      @map("chapter_id")
+  title      String
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @map("created_at")
+  chapter    Chapter  @relation(fields: [chapterId], references: [id])
+
+  @@map("lessons")
+}
+
+model KnowledgePoint {
+  id        Int                      @id @default(autoincrement())
+  chapterId Int                      @map("chapter_id")
+  name      String
+  sortOrder Int                      @default(0) @map("sort_order")
+  createdAt DateTime                 @default(now()) @map("created_at")
+  chapter   Chapter                  @relation(fields: [chapterId], references: [id])
+  problems  ProblemKnowledgePoint[]
+
+  @@map("knowledge_points")
+}
+
+model Problem {
+  id             Int                      @id @default(autoincrement())
+  content        String                   // TipTap JSON
+  difficulty     Int                      @default(1)
+  lessonTitle    String?                  @map("lesson_title")  // 课时标题，如"共点力的平衡"
+  questionType   String?                  @map("question_type") // 题型：单选/多选/实验/计算
+  sourceDate     String?                  @map("source_date")   // 题目来源日期，如"2024-06-07"
+  remarks        String?                                               // 备注
+  createdAt      DateTime                 @default(now()) @map("created_at")
+  knowledgePoints ProblemKnowledgePoint[]
+
+  @@map("problems")
+}
+
+model ProblemKnowledgePoint {
+  problemId        Int            @map("problem_id")
+  knowledgePointId Int            @map("knowledge_point_id")
+  problem          Problem        @relation(fields: [problemId], references: [id])
+  knowledgePoint   KnowledgePoint @relation(fields: [knowledgePointId], references: [id])
+
+  @@id([problemId, knowledgePointId])
+  @@map("problem_knowledge_points")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
