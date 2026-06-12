@@ -3,4 +3,6 @@ dist
 .env
 uploads
 *.log
+*.db
+*.db-journal
 .DS_Store
