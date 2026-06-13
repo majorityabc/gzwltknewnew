@@ -32,18 +32,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const hash = window.location.hash;
 
     const init = async () => {
-      // Raw fetch test
+      const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+      let results = "";
+
+      // Test 1: fetch with simple header
       try {
-        const res = await fetch(
-          process.env.NEXT_PUBLIC_SUPABASE_URL! + "/auth/v1/settings",
-        );
-        setStatus((prev) => prev + " | rawFetch: " + res.status);
+        const r = await fetch(url + "/auth/v1/settings", {
+          headers: { test: "hello" },
+        });
+        results += "T1(simple header)=" + r.status + " ";
       } catch (e: any) {
-        setStatus((prev) => prev + " | rawFetch FAIL: " + (e?.message || String(e)));
+        results += "T1 FAIL: " + e.message + " ";
       }
 
+      // Test 2: window.fetch with apikey
+      try {
+        const r = await window.fetch(url + "/auth/v1/settings", {
+          headers: { apikey: key },
+        });
+        results += "T2(window.fetch)=" + r.status + " ";
+      } catch (e: any) {
+        results += "T2 FAIL: " + e.message + " ";
+      }
+
+      // Test 3: XHR
+      try {
+        results += "T3(XHR)...";
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", url + "/auth/v1/settings", false);
+        xhr.setRequestHeader("apikey", key);
+        xhr.send();
+        results += "status=" + xhr.status + " ";
+      } catch (e: any) {
+        results += "T3 FAIL: " + e.message + " ";
+      }
+
+      setStatus(results);
+
       if (hash && hash.includes("access_token")) {
-        setStatus("hash detected, parsing...");
+        setStatus((prev) => prev + " | hash detected");
         try {
           const params = new URLSearchParams(hash.substring(1));
           const access_token = params.get("access_token");
@@ -51,22 +79,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const expires_at = params.get("expires_at");
 
           if (access_token && refresh_token) {
-            setStatus("calling setSession...");
+            setStatus((prev) => prev + " | calling setSession...");
             const { data, error } = await supabase.auth.setSession({
               access_token,
               refresh_token,
             });
             if (error) {
-              setStatus("setSession error: " + error.message);
+              setStatus((prev) => prev + " | setSession ERR: " + error.message);
             } else {
-              setStatus("setSession OK, user=" + (!!data?.user));
+              setStatus((prev) => prev + " | setSession OK user=" + (!!data?.user));
               window.history.replaceState({}, "", "/");
             }
           } else {
-            setStatus("missing access_token or refresh_token");
+            setStatus((prev) => prev + " | missing token");
           }
         } catch (err: any) {
-          setStatus("exception: " + err?.message);
+          setStatus((prev) => prev + " | EXC: " + err?.message);
         }
       }
 
