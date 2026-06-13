@@ -33,7 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const init = async () => {
       const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+      const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!.replace(/\s+/g, "");
       let results = "";
 
       // Scan key for invalid chars
