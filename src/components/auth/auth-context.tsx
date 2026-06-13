@@ -26,31 +26,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("init");
 
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search);
-    const code = searchParams.get("code");
+    const hash = window.location.hash;
 
     const init = async () => {
-      if (code) {
-        try {
-          const { error } = await supabase.auth.exchangeCodeForSession(code);
-          if (error) {
-            console.error("Auth exchange error:", error);
-            window.location.replace("/auth/auth-error");
-            return;
-          }
-        } catch (err) {
-          console.error("Auth exchange exception:", err);
-          window.location.replace("/auth/auth-error");
-          return;
-        }
-        window.history.replaceState({}, "", "/");
+      // Raw fetch test
+      try {
+        const res = await fetch(
+          process.env.NEXT_PUBLIC_SUPABASE_URL! + "/auth/v1/settings",
+        );
+        setStatus((prev) => prev + " | rawFetch: " + res.status);
+      } catch (e: any) {
+        setStatus((prev) => prev + " | rawFetch FAIL: " + (e?.message || String(e)));
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
-      setSession(session);
-      setUser(session?.user ?? null);
+      if (hash && hash.includes("access_token")) {
+        setStatus("hash detected, parsing...");
+        try {
+          const params = new URLSearchParams(hash.substring(1));
+          const access_token = params.get("access_token");
+          const refresh_token = params.get("refresh_token");
+          const expires_at = params.get("expires_at");
+
+          if (access_token && refresh_token) {
+            setStatus("calling setSession...");
+            const { data, error } = await supabase.auth.setSession({
+              access_token,
+              refresh_token,
+            });
+            if (error) {
+              setStatus("setSession error: " + error.message);
+            } else {
+              setStatus("setSession OK, user=" + (!!data?.user));
+              window.history.replaceState({}, "", "/");
+            }
+          } else {
+            setStatus("missing access_token or refresh_token");
+          }
+        } catch (err: any) {
+          setStatus("exception: " + err?.message);
+        }
+      }
+
+      setStatus((prev) => prev + " | getSession...");
+      const { data: { session: s } } = await supabase.auth.getSession();
+      setStatus((prev) => prev + " session=" + (!!s));
+      setSession(s);
+      setUser(s?.user ?? null);
       setLoading(false);
     };
 
@@ -88,6 +112,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider value={value}>
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "#ffc", padding: 4, fontSize: 10, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
+        {status}
+      </div>
       {children}
     </AuthContext.Provider>
   );
