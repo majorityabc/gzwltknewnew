@@ -36,36 +36,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
       let results = "";
 
+      // Scan key for invalid chars
+      results += "keyLen=" + key.length + " ";
+      let badChars = "";
+      for (let i = 0; i < key.length; i++) {
+        const c = key.charCodeAt(i);
+        if (c < 0x20 && c !== 0x09) {
+          badChars += " pos" + i + "=" + c + " ";
+        }
+      }
+      results += badChars ? "BAD_CHARS:" + badChars : "keyClean ";
+
       // Test 1: fetch with simple header
       try {
         const r = await fetch(url + "/auth/v1/settings", {
           headers: { test: "hello" },
         });
-        results += "T1(simple header)=" + r.status + " ";
+        results += "T1=" + r.status + " ";
       } catch (e: any) {
-        results += "T1 FAIL: " + e.message + " ";
+        results += "T1 FAIL:" + e.message + " ";
       }
 
-      // Test 2: window.fetch with apikey
+      // Test 2: fetch with trimmed key
+      const cleanKey = key.trim();
       try {
-        const r = await window.fetch(url + "/auth/v1/settings", {
-          headers: { apikey: key },
+        const r = await fetch(url + "/auth/v1/settings", {
+          headers: { apikey: cleanKey },
         });
-        results += "T2(window.fetch)=" + r.status + " ";
+        results += "T2(trim)=" + r.status + " ";
       } catch (e: any) {
-        results += "T2 FAIL: " + e.message + " ";
+        results += "T2 FAIL:" + e.message.substring(0, 50) + " ";
       }
 
-      // Test 3: XHR
+      // Test 3: XHR with trimmed key
       try {
-        results += "T3(XHR)...";
         const xhr = new XMLHttpRequest();
         xhr.open("GET", url + "/auth/v1/settings", false);
-        xhr.setRequestHeader("apikey", key);
+        xhr.setRequestHeader("apikey", cleanKey);
         xhr.send();
-        results += "status=" + xhr.status + " ";
+        results += "T3(XHR)=" + xhr.status + " ";
       } catch (e: any) {
-        results += "T3 FAIL: " + e.message + " ";
+        results += "T3 FAIL:" + e.message.substring(0, 80) + " ";
       }
 
       setStatus(results);
