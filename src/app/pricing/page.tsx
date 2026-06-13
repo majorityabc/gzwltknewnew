@@ -6,10 +6,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth/auth-context";
 
-const PAYPAL_CLIENT_ID =
-  process.env.NEXT_PUBLIC_PAYPAL_SANDBOX === "true"
-    ? process.env.NEXT_PUBLIC_PAYPAL_SANDBOX_CLIENT_ID!
-    : process.env.NEXT_PUBLIC_PAYPAL_LIVE_CLIENT_ID!;
+const IS_SANDBOX = process.env.NEXT_PUBLIC_PAYPAL_SANDBOX === "true";
+
+const PAYPAL_CLIENT_ID = IS_SANDBOX
+  ? process.env.NEXT_PUBLIC_PAYPAL_SANDBOX_CLIENT_ID!
+  : process.env.NEXT_PUBLIC_PAYPAL_LIVE_CLIENT_ID!;
 
 interface Plan {
   key: string;
@@ -275,6 +276,7 @@ export default function PricingPage() {
                         currency: "USD",
                         intent: "capture",
                         components: "buttons",
+                        environment: IS_SANDBOX ? "sandbox" : "production",
                       }}
                     >
                       <PayPalButtons
