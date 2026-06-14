@@ -125,7 +125,8 @@ function PricingContent() {
         .then((r) => r.json())
         .then((result) => {
           if (result.success) {
-            setMessage({ type: "success", text: "支付成功！请登录以开始使用。" });
+            router.push("/payment-success");
+            return;
           } else {
             setMessage({ type: "error", text: "支付验证失败，请联系客服。" });
           }
