@@ -124,7 +124,10 @@ export default function PricingPage() {
   const { user } = useAuth();
   const router = useRouter();
 
-  const log = (msg: string) => setDebug((prev) => prev + (prev ? " | " : "") + msg);
+  const log = (msg: string) => {
+    console.log("[PAYPAL]", msg);
+    setDebug((prev) => prev + (prev ? " | " : "") + msg);
+  };
 
   // Init debug with env info
   if (typeof window !== "undefined" && !debug) {
@@ -147,8 +150,27 @@ export default function PricingPage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#f6f8fb] to-white">
       {/* Debug Bar */}
-      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "#ffc", padding: 4, fontSize: 10, fontFamily: "monospace", whiteSpace: "pre-wrap", maxHeight: 60, overflow: "auto" }}>
-        PAYPAL DEBUG: {debug || "loading..."}
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "#ffc", padding: 4, fontSize: 10, fontFamily: "monospace", whiteSpace: "pre-wrap", maxHeight: 80, overflow: "auto" }}>
+        <span style={{ fontWeight: "bold" }}>PAYPAL DEBUG:</span> {debug || "loading..."}
+        <button
+          onClick={async () => {
+            log("manual test...");
+            try {
+              const res = await fetch("/api/paypal/create-order", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ amount: 1, currency: "USD", description: "test" }),
+              });
+              const data = await res.json();
+              log("status=" + res.status + " id=" + (data.id ? data.id.substring(0, 12) : "NONE") + " err=" + (data.error || "none"));
+            } catch (e: any) {
+              log("FETCH ERR: " + e.message);
+            }
+          }}
+          style={{ marginLeft: 8, fontSize: 9, padding: "1px 6px", background: "#333", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer" }}
+        >
+          Test API
+        </button>
       </div>
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/85 backdrop-blur-xl border-b border-gray-100">
