@@ -34,6 +34,7 @@ async function getAccessToken(): Promise<string> {
 export async function POST(request: NextRequest) {
   try {
     const { amount, currency = "USD", description } = await request.json();
+    const origin = request.nextUrl.origin;
     const token = await getAccessToken();
 
     const response = await fetch(`${PAYPAL_API}/v2/checkout/orders`, {
@@ -54,12 +55,19 @@ export async function POST(request: NextRequest) {
             description,
           },
         ],
+        application_context: {
+          return_url: `${origin}/pricing?paypal=success`,
+          cancel_url: `${origin}/pricing?paypal=cancel`,
+        },
       }),
     });
 
     const order: any = await response.json();
     if (!response.ok) throw new Error(JSON.stringify(order));
-    return NextResponse.json({ id: order.id });
+
+    const approveLink = order.links?.find((l: any) => l.rel === "approve")?.href;
+
+    return NextResponse.json({ id: order.id, approvalUrl: approveLink });
   } catch (error: any) {
     console.error("PayPal create order error:", error);
     return NextResponse.json(

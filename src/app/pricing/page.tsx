@@ -1,16 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/auth/auth-context";
-
-const IS_SANDBOX = process.env.NEXT_PUBLIC_PAYPAL_SANDBOX === "true";
-
-const PAYPAL_CLIENT_ID = IS_SANDBOX
-  ? process.env.NEXT_PUBLIC_PAYPAL_SANDBOX_CLIENT_ID!
-  : process.env.NEXT_PUBLIC_PAYPAL_LIVE_CLIENT_ID!;
 
 interface Plan {
   key: string;
@@ -113,9 +106,9 @@ const faqs = [
   },
 ];
 
-export default function PricingPage() {
+function PricingContent() {
   const [billing, setBilling] = useState<"monthly" | "yearly">("yearly");
-  const [checkoutPlan, setCheckoutPlan] = useState<string | null>(null);
+  const [checkingOut, setCheckingOut] = useState(false);
   const [message, setMessage] = useState<{
     type: "success" | "error" | "info";
     text: string;
@@ -123,22 +116,69 @@ export default function PricingPage() {
   const [debug, setDebug] = useState("");
   const { user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const log = (msg: string) => {
     console.log("[PAYPAL]", msg);
     setDebug((prev) => prev + (prev ? " | " : "") + msg);
   };
 
-  // Init debug with env info
-  if (typeof window !== "undefined" && !debug) {
-    setTimeout(() => {
-      setDebug(
-        "sandbox=" + IS_SANDBOX +
-        " | clientId=" + PAYPAL_CLIENT_ID?.substring(0, 10) + "..." +
-        " | idLen=" + PAYPAL_CLIENT_ID?.length
-      );
-    }, 0);
-  }
+  useEffect(() => {
+    setDebug("sandbox=" + (process.env.NEXT_PUBLIC_PAYPAL_SANDBOX === "true"));
+    // Handle return from PayPal
+    const paypalResult = searchParams.get("paypal");
+    const token = searchParams.get("token");
+    if (paypalResult === "success" && token) {
+      log("returned from PayPal, capturing token=" + token.substring(0, 12) + "...");
+      fetch(`/api/paypal/capture-order/${token}`, { method: "POST" })
+        .then((r) => r.json())
+        .then((result) => {
+          if (result.success) {
+            log("capture OK");
+            setMessage({ type: "success", text: "支付成功！请登录以开始使用。" });
+          } else {
+            log("capture FAIL: " + (result.error || "unknown"));
+            setMessage({ type: "error", text: "支付验证失败，请联系客服。" });
+          }
+          // Clean URL
+          window.history.replaceState({}, "", "/pricing");
+        })
+        .catch((e) => log("capture ERR: " + e.message));
+    } else if (paypalResult === "cancel") {
+      log("paypal cancelled");
+      setMessage({ type: "info", text: "您取消了支付。" });
+      window.history.replaceState({}, "", "/pricing");
+    }
+  }, []);
+
+  const handlePayPalCheckout = useCallback(async (plan: Plan) => {
+    setCheckingOut(true);
+    log("creating order for " + plan.key + "...");
+    try {
+      const res = await fetch("/api/paypal/create-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: billing === "monthly" ? plan.monthlyPrice : plan.yearlyPrice,
+          currency: "USD",
+          description: `${plan.name} 计划 - ${billing === "monthly" ? "月度" : "年度"}订阅`,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        log("create ERR: " + data.error);
+        setMessage({ type: "error", text: "创建订单失败：" + data.error });
+        setCheckingOut(false);
+        return;
+      }
+      log("order ok, redirecting to PayPal...");
+      window.location.href = data.approvalUrl;
+    } catch (e: any) {
+      log("create EXC: " + e.message);
+      setMessage({ type: "error", text: "网络错误，请稍后重试。" });
+      setCheckingOut(false);
+    }
+  }, [billing]);
 
   const getPrice = (plan: Plan) =>
     billing === "monthly" ? plan.monthlyPrice : plan.yearlyPrice;
@@ -239,7 +279,6 @@ export default function PricingPage() {
       <section className="max-w-6xl mx-auto px-6 pb-16 grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
         {plans.map((plan) => {
           const price = getPrice(plan);
-          const isCheckingOut = checkoutPlan === plan.key;
 
           return (
             <div
@@ -248,10 +287,6 @@ export default function PricingPage() {
                 plan.highlighted
                   ? "border-blue-500 shadow-[0_8px_32px_rgba(22,119,255,0.14)] scale-[1.03] z-10 hover:scale-[1.03] hover:-translate-y-1 hover:shadow-[0_20px_48px_rgba(22,119,255,0.2)]"
                   : "border-gray-200 shadow-sm hover:-translate-y-1.5 hover:shadow-lg"
-              } ${
-                isCheckingOut
-                  ? "scale-105 z-20 border-blue-500 shadow-[0_8px_40px_rgba(22,119,255,0.18)]"
-                  : ""
               }`}
             >
               <div className="p-7 pb-0">
@@ -301,106 +336,13 @@ export default function PricingPage() {
                   >
                     {plan.cta}
                   </button>
-                ) : isCheckingOut ? (
-                  <div className="mb-1">
-                    <div className="flex justify-between items-center px-3.5 py-2.5 bg-gray-50 rounded-xl mb-3 text-sm font-medium text-gray-600">
-                      <span>
-                        {plan.name}{" "}
-                        {billing === "monthly" ? "月度" : "年度"}
-                      </span>
-                      <span className="text-lg font-bold text-[#1a1a2e]">${price}</span>
-                    </div>
-                    <PayPalScriptProvider
-                      options={{
-                        clientId: PAYPAL_CLIENT_ID,
-                        currency: "USD",
-                        intent: "capture",
-                        components: "buttons",
-                        environment: IS_SANDBOX ? "sandbox" : "production",
-                        sdkBaseUrl: "/api/paypal/sdk",
-                      }}
-                    >
-                      <PayPalButtons
-                        style={{
-                          layout: "vertical",
-                          color: "gold",
-                          shape: "rect",
-                          label: "paypal",
-                        }}
-                        createOrder={async () => {
-                          log("creating order...");
-                          try {
-                            const res = await fetch("/api/paypal/create-order", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({
-                                amount: billing === "monthly" ? plan.monthlyPrice : plan.yearlyPrice,
-                                currency: "USD",
-                                description: `${plan.name} 计划 - ${billing === "monthly" ? "月度" : "年度"}订阅`,
-                              }),
-                            });
-                            if (!res.ok) {
-                              const err = await res.json();
-                              throw new Error(err.error || "Create order failed");
-                            }
-                            const { id } = await res.json();
-                            log("order created: " + id.substring(0, 12) + "...");
-                            return id;
-                          } catch (e: any) {
-                            log("createOrder ERR: " + e.message);
-                            throw e;
-                          }
-                        }}
-                        onApprove={async (data) => {
-                          log("onApprove: " + data.orderID.substring(0, 12) + "...");
-                          const res = await fetch(
-                            `/api/paypal/capture-order/${data.orderID}`,
-                            { method: "POST" },
-                          );
-                          const result = await res.json();
-                          if (result.success) {
-                            log("capture OK");
-                            setMessage({
-                              type: "success",
-                              text: "支付成功！请登录以开始使用。",
-                            });
-                            setCheckoutPlan(null);
-                          } else {
-                            log("capture FAIL: " + (result.error || "unknown"));
-                            setMessage({
-                              type: "error",
-                              text: "支付验证失败，请联系客服。",
-                            });
-                          }
-                        }}
-                        onCancel={() => {
-                          log("cancelled");
-                          setCheckoutPlan(null);
-                          setMessage({ type: "info", text: "您取消了支付。" });
-                        }}
-                        onError={(err) => {
-                          log("onError: " + (err?.message || String(err)));
-                          setCheckoutPlan(null);
-                          setMessage({
-                            type: "error",
-                            text: "支付过程中出现错误，请稍后重试。",
-                          });
-                        }}
-                      />
-                    </PayPalScriptProvider>
-                    <button
-                      onClick={() => setCheckoutPlan(null)}
-                      className="w-full text-center text-sm text-gray-400 hover:text-gray-600 mt-2 transition-colors"
-                    >
-                      取消
-                    </button>
-                  </div>
                 ) : (
                   <button
-                    onClick={() => setCheckoutPlan(plan.key)}
-                    className="w-full h-12 text-base font-semibold rounded-xl bg-gradient-to-r from-blue-500 to-blue-400 text-white hover:from-blue-600 hover:to-blue-500 hover:-translate-y-0.5 hover:shadow-lg transition-all"
+                    onClick={() => handlePayPalCheckout(plan)}
+                    disabled={checkingOut}
+                    className="w-full h-12 text-base font-semibold rounded-xl bg-gradient-to-r from-blue-500 to-blue-400 text-white hover:from-blue-600 hover:to-blue-500 hover:-translate-y-0.5 hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    使用 PayPal 订阅
+                    {checkingOut ? "正在跳转到 PayPal..." : "使用 PayPal 订阅"}
                   </button>
                 )}
 
@@ -490,5 +432,13 @@ export default function PricingPage() {
         </Link>
       </section>
     </div>
+  );
+}
+
+export default function PricingPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+      <PricingContent />
+    </Suspense>
   );
 }
