@@ -120,8 +120,22 @@ export default function PricingPage() {
     type: "success" | "error" | "info";
     text: string;
   } | null>(null);
+  const [debug, setDebug] = useState("");
   const { user } = useAuth();
   const router = useRouter();
+
+  const log = (msg: string) => setDebug((prev) => prev + (prev ? " | " : "") + msg);
+
+  // Init debug with env info
+  if (typeof window !== "undefined" && !debug) {
+    setTimeout(() => {
+      setDebug(
+        "sandbox=" + IS_SANDBOX +
+        " | clientId=" + PAYPAL_CLIENT_ID?.substring(0, 10) + "..." +
+        " | idLen=" + PAYPAL_CLIENT_ID?.length
+      );
+    }, 0);
+  }
 
   const getPrice = (plan: Plan) =>
     billing === "monthly" ? plan.monthlyPrice : plan.yearlyPrice;
@@ -132,6 +146,10 @@ export default function PricingPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#f6f8fb] to-white">
+      {/* Debug Bar */}
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "#ffc", padding: 4, fontSize: 10, fontFamily: "monospace", whiteSpace: "pre-wrap", maxHeight: 60, overflow: "auto" }}>
+        PAYPAL DEBUG: {debug || "loading..."}
+      </div>
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/85 backdrop-blur-xl border-b border-gray-100">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
@@ -288,35 +306,45 @@ export default function PricingPage() {
                           label: "paypal",
                         }}
                         createOrder={async () => {
-                          const res = await fetch("/api/paypal/create-order", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              amount: billing === "monthly" ? plan.monthlyPrice : plan.yearlyPrice,
-                              currency: "USD",
-                              description: `${plan.name} 计划 - ${billing === "monthly" ? "月度" : "年度"}订阅`,
-                            }),
-                          });
-                          if (!res.ok) {
-                            const err = await res.json();
-                            throw new Error(err.error || "Create order failed");
+                          log("creating order...");
+                          try {
+                            const res = await fetch("/api/paypal/create-order", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                amount: billing === "monthly" ? plan.monthlyPrice : plan.yearlyPrice,
+                                currency: "USD",
+                                description: `${plan.name} 计划 - ${billing === "monthly" ? "月度" : "年度"}订阅`,
+                              }),
+                            });
+                            if (!res.ok) {
+                              const err = await res.json();
+                              throw new Error(err.error || "Create order failed");
+                            }
+                            const { id } = await res.json();
+                            log("order created: " + id.substring(0, 12) + "...");
+                            return id;
+                          } catch (e: any) {
+                            log("createOrder ERR: " + e.message);
+                            throw e;
                           }
-                          const { id } = await res.json();
-                          return id;
                         }}
                         onApprove={async (data) => {
+                          log("onApprove: " + data.orderID.substring(0, 12) + "...");
                           const res = await fetch(
                             `/api/paypal/capture-order/${data.orderID}`,
                             { method: "POST" },
                           );
                           const result = await res.json();
                           if (result.success) {
+                            log("capture OK");
                             setMessage({
                               type: "success",
                               text: "支付成功！请登录以开始使用。",
                             });
                             setCheckoutPlan(null);
                           } else {
+                            log("capture FAIL: " + (result.error || "unknown"));
                             setMessage({
                               type: "error",
                               text: "支付验证失败，请联系客服。",
@@ -324,11 +352,12 @@ export default function PricingPage() {
                           }
                         }}
                         onCancel={() => {
+                          log("cancelled");
                           setCheckoutPlan(null);
                           setMessage({ type: "info", text: "您取消了支付。" });
                         }}
                         onError={(err) => {
-                          console.error("PayPal error:", err);
+                          log("onError: " + (err?.message || String(err)));
                           setCheckoutPlan(null);
                           setMessage({
                             type: "error",
