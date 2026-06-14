@@ -40,8 +40,8 @@ const plans: Plan[] = [
   {
     key: "pro",
     name: "Pro",
-    monthlyPrice: 14,
-    yearlyPrice: 120,
+    monthlyPrice: 0.1,
+    yearlyPrice: 1.0,
     description: "适合专业教师日常使用",
     highlighted: true,
     badge: "最受欢迎",
@@ -61,8 +61,8 @@ const plans: Plan[] = [
   {
     key: "team",
     name: "Team",
-    monthlyPrice: 29,
-    yearlyPrice: 290,
+    monthlyPrice: 0.1,
+    yearlyPrice: 1.0,
     description: "适合教研组或学校团队",
     features: [
       { text: "无限题目数量", included: true },
