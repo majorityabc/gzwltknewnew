@@ -277,6 +277,7 @@ export default function PricingPage() {
                         intent: "capture",
                         components: "buttons",
                         environment: IS_SANDBOX ? "sandbox" : "production",
+                        sdkBaseUrl: "/api/paypal/sdk",
                       }}
                     >
                       <PayPalButtons
