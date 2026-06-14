@@ -113,39 +113,28 @@ function PricingContent() {
     type: "success" | "error" | "info";
     text: string;
   } | null>(null);
-  const [debug, setDebug] = useState("");
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const log = (msg: string) => {
-    console.log("[PAYPAL]", msg);
-    setDebug((prev) => prev + (prev ? " | " : "") + msg);
-  };
-
   useEffect(() => {
-    setDebug("sandbox=" + (process.env.NEXT_PUBLIC_PAYPAL_SANDBOX === "true"));
-    // Handle return from PayPal
     const paypalResult = searchParams.get("paypal");
     const token = searchParams.get("token");
     if (paypalResult === "success" && token) {
-      log("returned from PayPal, capturing token=" + token.substring(0, 12) + "...");
       fetch(`/api/paypal/capture-order/${token}`, { method: "POST" })
         .then((r) => r.json())
         .then((result) => {
           if (result.success) {
-            log("capture OK");
             setMessage({ type: "success", text: "支付成功！请登录以开始使用。" });
           } else {
-            log("capture FAIL: " + (result.error || "unknown"));
             setMessage({ type: "error", text: "支付验证失败，请联系客服。" });
           }
-          // Clean URL
           window.history.replaceState({}, "", "/pricing");
         })
-        .catch((e) => log("capture ERR: " + e.message));
+        .catch(() => {
+          setMessage({ type: "error", text: "支付验证失败，请联系客服。" });
+        });
     } else if (paypalResult === "cancel") {
-      log("paypal cancelled");
       setMessage({ type: "info", text: "您取消了支付。" });
       window.history.replaceState({}, "", "/pricing");
     }
@@ -153,7 +142,6 @@ function PricingContent() {
 
   const handlePayPalCheckout = useCallback(async (plan: Plan) => {
     setCheckingOut(true);
-    log("creating order for " + plan.key + "...");
     try {
       const res = await fetch("/api/paypal/create-order", {
         method: "POST",
@@ -166,15 +154,12 @@ function PricingContent() {
       });
       const data = await res.json();
       if (data.error) {
-        log("create ERR: " + data.error);
         setMessage({ type: "error", text: "创建订单失败：" + data.error });
         setCheckingOut(false);
         return;
       }
-      log("order ok, redirecting to PayPal...");
       window.location.href = data.approvalUrl;
-    } catch (e: any) {
-      log("create EXC: " + e.message);
+    } catch {
       setMessage({ type: "error", text: "网络错误，请稍后重试。" });
       setCheckingOut(false);
     }
@@ -189,29 +174,6 @@ function PricingContent() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#f6f8fb] to-white">
-      {/* Debug Bar */}
-      <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "#ffc", padding: 4, fontSize: 10, fontFamily: "monospace", whiteSpace: "pre-wrap", maxHeight: 80, overflow: "auto" }}>
-        <span style={{ fontWeight: "bold" }}>PAYPAL DEBUG:</span> {debug || "loading..."}
-        <button
-          onClick={async () => {
-            log("manual test...");
-            try {
-              const res = await fetch("/api/paypal/create-order", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ amount: 1, currency: "USD", description: "test" }),
-              });
-              const data = await res.json();
-              log("status=" + res.status + " id=" + (data.id ? data.id.substring(0, 12) : "NONE") + " err=" + (data.error || "none"));
-            } catch (e: any) {
-              log("FETCH ERR: " + e.message);
-            }
-          }}
-          style={{ marginLeft: 8, fontSize: 9, padding: "1px 6px", background: "#333", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer" }}
-        >
-          Test API
-        </button>
-      </div>
       {/* Header */}
       <header className="sticky top-0 z-50 bg-white/85 backdrop-blur-xl border-b border-gray-100">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
