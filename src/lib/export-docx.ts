@@ -55,6 +55,22 @@ function getImageNaturalSize(
   });
 }
 
+function mimeToImageRunType(mime: string): "png" | "jpg" | "gif" {
+  if (mime === "image/jpeg") return "jpg";
+  if (mime === "image/gif") return "gif";
+  return "png"; // 其他格式按 png 兜底
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 // ---- TipTap JSON → docx children ----
 
 const MAX_PAGE_WIDTH_PX = 460;
@@ -109,21 +125,46 @@ async function tipTapNodeToInlineChildren(
     const src = (node.attrs?.src as string) || "";
     if (src) {
       try {
+        let base64: string;
+        let mimeType = "image/png";
         let w = 400;
         let h = 200;
+
         if (src.startsWith("data:")) {
+          // data URL：从 mime 部分解析真实类型
+          const mimeMatch = src.match(/^data:([^;,]+)/);
+          if (mimeMatch) mimeType = mimeMatch[1];
+          base64 = src.replace(/^data:[^,]*,/, "");
           const natural = await getImageNaturalSize(src);
           w = natural.width;
           h = natural.height;
+        } else {
+          // /api/images/<id> 等引用：fetch 获取字节和真实 Content-Type
+          const res = await fetch(src);
+          if (!res.ok) throw new Error(`获取图片失败: ${res.status}`);
+          mimeType =
+            res.headers.get("Content-Type")?.split(";")[0].trim() || mimeType;
+          const buffer = await res.arrayBuffer();
+          base64 = arrayBufferToBase64(buffer);
+          const blobUrl = URL.createObjectURL(
+            new Blob([buffer], { type: mimeType }),
+          );
+          try {
+            const natural = await getImageNaturalSize(blobUrl);
+            w = natural.width;
+            h = natural.height;
+          } finally {
+            URL.revokeObjectURL(blobUrl);
+          }
         }
+
         if (w > MAX_PAGE_WIDTH_PX) {
           h = Math.round(h * (MAX_PAGE_WIDTH_PX / w));
           w = MAX_PAGE_WIDTH_PX;
         }
-        const base64 = src.replace(/^data:image\/\w+;base64,/, "");
         results.push(
           new ImageRun({
-            type: "png",
+            type: mimeToImageRunType(mimeType),
             data: base64,
             transformation: { width: w, height: h },
           }),

@@ -1,17 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
-import { getUserFromCookies } from "@/lib/auth";
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await getUserFromCookies();
-    if (!user) {
-      return NextResponse.json({ error: "请先登录" }, { status: 401 });
-    }
     const { id } = await params;
     const numId = Number(id);
 

@@ -3,7 +3,14 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL! });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL!,
+  // 连云数据库时设 DATABASE_SSL=true；自己服务器上的本地 PostgreSQL 留空即可
+  ssl:
+    process.env.DATABASE_SSL === "true"
+      ? { rejectUnauthorized: false }
+      : undefined,
+});
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
@@ -71,6 +78,14 @@ const textbookData: { name: string; grade: string; chapters: string[] }[] = [
 ];
 
 async function main() {
+  // 幂等保护：已有课本数据时直接退出，防止误跑覆盖用户已修改的数据
+  const existing = await prisma.textbook.count();
+  if (existing > 0) {
+    console.log(`数据库里已有 ${existing} 本课本，为避免覆盖现有数据，本次不执行种子写入。`);
+    console.log("如果确实需要重新初始化，请先手动清空相关数据后再运行本脚本。");
+    return;
+  }
+
   console.log("开始写入种子数据...\n");
 
   for (let ti = 0; ti < textbookData.length; ti++) {

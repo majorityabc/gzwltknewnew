@@ -1,22 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getUserFromCookies } from "@/lib/auth";
+import { computeContentHash } from "@/lib/content-utils";
+import { storeInlineImages, collectImageIds, deleteImages } from "@/lib/images";
 
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await getUserFromCookies();
-    if (!user) {
-      return NextResponse.json({ error: "请先登录" }, { status: 401 });
-    }
     const { id } = await params;
     const body = await request.json();
     const updateData: Record<string, unknown> = {};
+    let orphanedImageIds: string[] = [];
 
     if (body.content !== undefined) {
-      updateData.content = typeof body.content === "string" ? body.content : JSON.stringify(body.content);
+      const contentStr = typeof body.content === "string" ? body.content : JSON.stringify(body.content);
+      // 先用原始 content 重算哈希，再把内联图片抽出入库
+      updateData.contentHash = computeContentHash(contentStr);
+      const storedContent = await storeInlineImages(contentStr);
+
+      const old = await prisma.problem.findUnique({
+        where: { id: Number(id) },
+        select: { content: true },
+      });
+      if (old) {
+        const newImageIds = new Set(collectImageIds(storedContent));
+        orphanedImageIds = collectImageIds(old.content).filter(
+          (imageId) => !newImageIds.has(imageId),
+        );
+      }
+      updateData.content = storedContent;
     }
     if (body.difficulty !== undefined) {
       updateData.difficulty = Number(body.difficulty);
@@ -55,6 +68,11 @@ export async function PUT(
       },
     });
 
+    // 更新成功后清理不再被引用的旧图片
+    if (orphanedImageIds.length > 0) {
+      await deleteImages(orphanedImageIds);
+    }
+
     return NextResponse.json({ data: problem });
   } catch (error) {
     console.error("PUT /api/problems/[id] error:", error);
@@ -70,16 +88,20 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const user = await getUserFromCookies();
-    if (!user) {
-      return NextResponse.json({ error: "请先登录" }, { status: 401 });
-    }
     const { id } = await params;
+    const problem = await prisma.problem.findUnique({
+      where: { id: Number(id) },
+      select: { content: true },
+    });
     // Delete junction records first (CASCADE not automatic in SQLite with Prisma)
     await prisma.problemKnowledgePoint.deleteMany({
       where: { problemId: Number(id) },
     });
     await prisma.problem.delete({ where: { id: Number(id) } });
+    // 删除题目引用的图片
+    if (problem) {
+      await deleteImages(collectImageIds(problem.content));
+    }
     return NextResponse.json({ data: { success: true } });
   } catch (error) {
     console.error("DELETE /api/problems/[id] error:", error);

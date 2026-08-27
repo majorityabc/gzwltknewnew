@@ -8,7 +8,6 @@ import { ProblemList } from "@/components/problem-list";
 import type { ProblemItem } from "@/components/problem-list";
 import { ExamBasket } from "@/components/exam-basket";
 import type { BasketItem } from "@/components/exam-basket";
-import { AuthGate } from "@/components/auth/auth-gate";
 
 const RichTextEditor = dynamic(
   () => import("@/components/tiptap/rich-text-editor").then((mod) => mod.RichTextEditor),
@@ -76,7 +75,8 @@ export default function HomePage() {
   const [exporting, setExporting] = useState(false);
 
   // Select chapter → clear KP and problem selections
-  const handleSelectChapter = useCallback((id: number, title: string) => {
+  // id/title 为 null 时表示章节被删除，清空选中态
+  const handleSelectChapter = useCallback((id: number | null, title: string | null) => {
     setSelectedChapterId(id);
     setSelectedChapterTitle(title);
     setSelectedKpId(null);
@@ -414,7 +414,6 @@ export default function HomePage() {
   const QUESTION_TYPES = ["单选", "多选", "实验", "计算"];
 
   return (
-    <AuthGate>
     <div className="h-[calc(100vh-40px)] flex flex-col bg-gray-100 pb-10">
       {/* Main 3-column area */}
       <div className="flex-1 flex gap-0 overflow-hidden">
@@ -709,6 +708,5 @@ export default function HomePage() {
         exporting={exporting}
       />
     </div>
-    </AuthGate>
   );
 }

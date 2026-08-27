@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseDocx } from "@/lib/docx-parser";
-import { getUserFromCookies } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   try {
-    const user = await getUserFromCookies();
-    if (!user) {
-      return NextResponse.json({ error: "请先登录" }, { status: 401 });
-    }
     const formData = await request.formData();
     const file = formData.get("file");
 

@@ -1,18 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { computeContentHash } from "@/lib/content-utils";
 
 export async function POST(request: NextRequest) {
   try {
-    const { content } = await request.json();
+    const body = await request.json();
+    const contents: unknown[] = Array.isArray(body?.contents) ? body.contents : [];
 
-    if (!content) {
-      return NextResponse.json({ error: "缺少 content 参数" }, { status: 400 });
+    if (contents.length === 0) {
+      return NextResponse.json({ error: "缺少 contents 参数" }, { status: 400 });
     }
 
-    const contentStr = typeof content === "string" ? content : JSON.stringify(content);
+    const hashes = contents.map((c) =>
+      computeContentHash(typeof c === "string" ? c : JSON.stringify(c)),
+    );
 
-    const existing = await prisma.problem.findFirst({
-      where: { content: contentStr },
+    const matches = await prisma.problem.findMany({
+      where: { contentHash: { in: [...new Set(hashes)] } },
       include: {
         knowledgePoints: {
           include: { knowledgePoint: true },
@@ -20,16 +24,25 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (existing) {
-      return NextResponse.json({
-        duplicate: true,
-        existing: {
-          id: existing.id,
-          difficulty: existing.difficulty,
-          lessonTitle: existing.lessonTitle,
-          questionType: existing.questionType,
-          sourceDate: existing.sourceDate,
-          knowledgePoints: existing.knowledgePoints.map((kp) => ({
+    // 同一哈希可能有多条历史数据，取第一条
+    const byHash = new Map<string, (typeof matches)[number]>();
+    for (const m of matches) {
+      if (!byHash.has(m.contentHash)) byHash.set(m.contentHash, m);
+    }
+
+    const duplicates = [];
+    for (let index = 0; index < hashes.length; index++) {
+      const problem = byHash.get(hashes[index]);
+      if (!problem) continue;
+      duplicates.push({
+        index,
+        problem: {
+          id: problem.id,
+          difficulty: problem.difficulty,
+          lessonTitle: problem.lessonTitle,
+          questionType: problem.questionType,
+          sourceDate: problem.sourceDate,
+          knowledgePoints: problem.knowledgePoints.map((kp) => ({
             id: kp.knowledgePoint.id,
             name: kp.knowledgePoint.name,
           })),
@@ -37,7 +50,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    return NextResponse.json({ duplicate: false });
+    return NextResponse.json({ duplicates });
   } catch (error) {
     console.error("POST /api/problems/check-duplicate error:", error);
     return NextResponse.json({ error: "查重失败" }, { status: 500 });

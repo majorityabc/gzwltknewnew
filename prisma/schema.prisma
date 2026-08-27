@@ -60,6 +60,7 @@ model KnowledgePoint {
 model Problem {
   id             Int                      @id @default(autoincrement())
   content        String                   // TipTap JSON
+  contentHash    String                   @default("") // 归一化内容哈希（查重用）
   difficulty     Int                      @default(1)
   lessonTitle    String?                  @map("lesson_title")  // 课时标题，如"共点力的平衡"
   questionType   String?                  @map("question_type") // 题型：单选/多选/实验/计算
@@ -68,7 +69,17 @@ model Problem {
   createdAt      DateTime                 @default(now()) @map("created_at")
   knowledgePoints ProblemKnowledgePoint[]
 
+  @@index([contentHash])
   @@map("problems")
+}
+
+model ProblemImage {
+  id        String   @id @default(cuid())
+  mimeType  String
+  data      String   // base64
+  createdAt DateTime @default(now())
+
+  @@map("problem_images")
 }
 
 model ProblemKnowledgePoint {
@@ -79,13 +90,4 @@ model ProblemKnowledgePoint {
 
   @@id([problemId, knowledgePointId])
   @@map("problem_knowledge_points")
-}
-
-model User {
-  id         Int      @id @default(autoincrement())
-  supabaseId String   @unique @map("supabase_id")
-  email      String   @unique
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  @@map("users")
 }

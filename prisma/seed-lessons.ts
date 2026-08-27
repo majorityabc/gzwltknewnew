@@ -3,7 +3,14 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 import { PrismaClient } from "../src/generated/prisma/client";
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL! });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL!,
+  // 连云数据库时设 DATABASE_SSL=true；自己服务器上的本地 PostgreSQL 留空即可
+  ssl:
+    process.env.DATABASE_SSL === "true"
+      ? { rejectUnauthorized: false }
+      : undefined,
+});
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
@@ -181,9 +188,11 @@ const LESSONS: Record<string, string[]> = {
 };
 
 async function main() {
+  console.log("注意：本脚本会先清空所有课时（lessons），再按章节标题重新灌入标准课时。\n");
+
   // Clear existing lessons
   await prisma.lesson.deleteMany();
-  console.log("Cleared existing lessons");
+  console.log("已清空所有现有课时，开始重建...\n");
 
   // Get all chapters
   const chapters = await prisma.chapter.findMany({
@@ -194,7 +203,7 @@ async function main() {
   for (const ch of chapters) {
     const chapterLessons = LESSONS[ch.title];
     if (!chapterLessons) {
-      console.log(`  SKIP: ${ch.title} (no lesson data)`);
+      console.warn(`  ⚠ 警告：章节「${ch.title}」（${ch.textbook.name}）在课时映射表中找不到对应数据，已跳过。请检查章节标题是否与 seed.ts 完全一致。`);
       continue;
     }
 
@@ -208,10 +217,10 @@ async function main() {
       });
       count++;
     }
-    console.log(`  OK: ${ch.title} → ${chapterLessons.length} 课`);
+    console.log(`  ✓ ${ch.title} → ${chapterLessons.length} 课`);
   }
 
-  console.log(`\nDone! Created ${count} lessons total.`);
+  console.log(`\n完成！共创建 ${count} 条课时。`);
   await prisma.$disconnect();
 }
 

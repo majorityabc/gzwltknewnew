@@ -9,6 +9,16 @@ interface ProblemTag {
   name: string;
 }
 
+// /api/problems/check-duplicate 返回的已存在题目信息
+interface ExistingProblem {
+  id: number;
+  difficulty: number;
+  lessonTitle: string | null;
+  questionType: string | null;
+  sourceDate: string | null;
+  knowledgePoints: { id: number; name: string }[];
+}
+
 interface ModalProblem {
   id: number;
   paragraphs: DocParagraph[];
@@ -240,21 +250,30 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
     setError(null);
 
     try {
+      const contents = kept.map((p) =>
+        JSON.stringify(docParagraphsToTipTapJson(p.paragraphs)),
+      );
+
+      // 一次批量查重（按归一化内容哈希，服务端比对）
+      const checkRes = await fetch("/api/problems/check-duplicate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents }),
+      });
+      const checkData = await checkRes.json();
+      const duplicateMap = new Map<number, ExistingProblem>(
+        (checkData.duplicates || []).map(
+          (d: { index: number; problem: ExistingProblem }) => [d.index, d.problem],
+        ),
+      );
+
       let created = 0;
       let skipped = 0;
       let updated = 0;
 
-      for (const p of kept) {
-        const tipTapJson = docParagraphsToTipTapJson(p.paragraphs);
-        const contentStr = JSON.stringify(tipTapJson);
-
-        // Check duplicate
-        const checkRes = await fetch("/api/problems/check-duplicate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: contentStr }),
-        });
-        const checkData = await checkRes.json();
+      for (let i = 0; i < kept.length; i++) {
+        const p = kept[i];
+        const contentStr = contents[i];
 
         // Resolve tags → knowledgePointIds
         const kpIds: number[] = [];
@@ -283,9 +302,10 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
           }
         }
 
-        if (checkData.duplicate) {
-          const existing = checkData.existing;
-          const existingTags = (existing.knowledgePoints as { name: string }[])
+        const existing = duplicateMap.get(i);
+
+        if (existing) {
+          const existingTags = existing.knowledgePoints
             .map((kp) => kp.name).sort().join(",");
           const newTags = p.tags.map((t) => t.name).sort().join(",");
           const sameTags = existingTags === newTags;
@@ -303,7 +323,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              content: tipTapJson,
+              content: contentStr,
               difficulty: p.difficulty,
               questionType: p.questionType || null,
               sourceDate: p.sourceDate || null,

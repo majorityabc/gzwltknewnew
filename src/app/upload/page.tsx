@@ -6,7 +6,6 @@ import type { Editor } from "@tiptap/react";
 import katex from "katex";
 import type { DocContent, DocParagraph, ParagraphRun } from "@/lib/docx-parser";
 import { docParagraphsToTipTapJson } from "@/lib/tip-tap-converter";
-import { AuthGate } from "@/components/auth/auth-gate";
 import { GlobalToolbar } from "@/components/tiptap/global-toolbar";
 
 const RichTextEditor = dynamic(
@@ -38,6 +37,16 @@ interface ProblemTag {
   knowledgePointId?: number;
 }
 
+// /api/problems/check-duplicate 返回的已存在题目信息
+interface ExistingProblem {
+  id: number;
+  difficulty: number;
+  lessonTitle: string | null;
+  questionType: string | null;
+  sourceDate: string | null;
+  knowledgePoints: { id: number; name: string }[];
+}
+
 function todayStr(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -46,6 +55,7 @@ function todayStr(): string {
 interface Problem {
   id: number;
   paragraphs: DocParagraph[];
+  content: string; // TipTap JSON 字符串，编辑器实时更新
   kept: boolean;
   textbookId: number | null;
   chapterId: number | null;
@@ -205,37 +215,28 @@ export default function UploadPage() {
     if (!parsedDoc) return;
     const result: Problem[] = [];
     let current: DocParagraph[] = [];
+    const makeProblem = (paragraphs: DocParagraph[]): Problem => ({
+      id: result.length + 1,
+      paragraphs,
+      content: JSON.stringify(docParagraphsToTipTapJson(paragraphs)),
+      kept: true,
+      textbookId: null,
+      chapterId: null,
+      tags: [],
+      lessonTitle: "",
+      questionType: "",
+      difficulty: 3,
+      sourceDate: todayStr(),
+    });
     parsedDoc.paragraphs.forEach((para, i) => {
       current.push(para);
       if (splitIndices.has(i)) {
-        result.push({
-          id: result.length + 1,
-          paragraphs: current,
-          kept: true,
-          textbookId: null,
-          chapterId: null,
-          tags: [],
-          lessonTitle: "",
-          questionType: "",
-          difficulty: 3,
-          sourceDate: todayStr(),
-        });
+        result.push(makeProblem(current));
         current = [];
       }
     });
     if (current.length > 0) {
-      result.push({
-        id: result.length + 1,
-        paragraphs: current,
-        kept: true,
-        textbookId: null,
-        chapterId: null,
-        tags: [],
-        lessonTitle: "",
-        questionType: "",
-        difficulty: 3,
-        sourceDate: todayStr(),
-      });
+      result.push(makeProblem(current));
     }
     setProblems(result);
     setSavedMsg(null);
@@ -308,26 +309,29 @@ export default function UploadPage() {
     setError(null);
 
     try {
+      // 一次批量查重（按归一化内容哈希，服务端比对）
+      const checkRes = await fetch("/api/problems/check-duplicate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: keptProblems.map((p) => p.content) }),
+      });
+      const checkData = await checkRes.json();
+      const duplicateMap = new Map<number, ExistingProblem>(
+        (checkData.duplicates || []).map(
+          (d: { index: number; problem: ExistingProblem }) => [d.index, d.problem],
+        ),
+      );
+
       let created = 0;
       let skipped = 0;
       let updated = 0;
 
       for (let i = 0; i < keptProblems.length; i++) {
         const p = keptProblems[i];
-        const tipTapJson = docParagraphsToTipTapJson(p.paragraphs);
-        const contentStr = JSON.stringify(tipTapJson);
+        const existing = duplicateMap.get(i);
 
-        // Check for duplicate
-        const checkRes = await fetch("/api/problems/check-duplicate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: contentStr }),
-        });
-        const checkData = await checkRes.json();
-
-        if (checkData.duplicate) {
-          const existing = checkData.existing;
-          const existingTagNames = (existing.knowledgePoints as { name: string }[])
+        if (existing) {
+          const existingTagNames = existing.knowledgePoints
             .map((kp) => kp.name)
             .sort()
             .join(",");
@@ -389,7 +393,7 @@ export default function UploadPage() {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              content: tipTapJson,
+              content: p.content,
               difficulty: p.difficulty,
               lessonTitle: p.lessonTitle || null,
               questionType: p.questionType || null,
@@ -426,7 +430,7 @@ export default function UploadPage() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify([{
-              content: tipTapJson,
+              content: p.content,
               difficulty: p.difficulty,
               lessonTitle: p.lessonTitle || null,
               questionType: p.questionType || null,
@@ -452,7 +456,6 @@ export default function UploadPage() {
   const keptProblems = problems.filter((p) => p.kept);
 
   return (
-    <AuthGate>
     <div className="min-h-screen bg-gray-100">
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-2 py-3">
@@ -582,11 +585,13 @@ export default function UploadPage() {
 
                     {/* Editor content — plain, no inner border */}
                     <RichTextEditor
-                      content={JSON.stringify(docParagraphsToTipTapJson(problem.paragraphs))}
+                      content={problem.content}
                       editable={true}
                       plain
                       onFocus={(editor) => setActiveEditor(editor)}
-                      onChange={() => {}}
+                      onChange={(_html, json) =>
+                        updateProblem(problem.id, "content", JSON.stringify(json))
+                      }
                     />
 
                     {/* Divider */}
@@ -780,7 +785,6 @@ export default function UploadPage() {
         )}
       </main>
     </div>
-    </AuthGate>
   );
 }
 

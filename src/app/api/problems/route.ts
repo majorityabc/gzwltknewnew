@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getUserFromCookies } from "@/lib/auth";
+import { computeContentHash } from "@/lib/content-utils";
+import { storeInlineImages } from "@/lib/images";
 
 export async function GET(request: NextRequest) {
   try {
@@ -59,10 +60,6 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const user = await getUserFromCookies();
-    if (!user) {
-      return NextResponse.json({ error: "请先登录" }, { status: 401 });
-    }
     const body = await request.json();
 
     if (!Array.isArray(body)) {
@@ -83,9 +80,15 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      const contentStr = typeof content === "string" ? content : JSON.stringify(content);
+      // 先用原始 content 算哈希（图片节点只是 "[图片]" 占位符），再把内联图片抽出入库
+      const contentHash = computeContentHash(contentStr);
+      const storedContent = await storeInlineImages(contentStr);
+
       const problem = await prisma.problem.create({
         data: {
-          content: typeof content === "string" ? content : JSON.stringify(content),
+          content: storedContent,
+          contentHash,
           difficulty: difficulty ?? 1,
           lessonTitle: lessonTitle ?? null,
           questionType: questionType ?? null,
