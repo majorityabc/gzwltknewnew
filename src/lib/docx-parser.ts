@@ -18,8 +18,8 @@ import * as fs from "node:fs";
 
 const execFileAsync = promisify(execFile);
 
-/** OLE 公式预览图（wmf/emf）→ 高清 PNG data URL */
-async function convertVectorToPng(zip: AdmZip, filePath: string): Promise<string | null> {
+/** OLE 公式预览图（wmf/emf）→ PNG data URL，按 Word 预期尺寸输出（2x 高清） */
+async function convertVectorToPng(zip: AdmZip, filePath: string, wPt: number, hPt: number): Promise<string | null> {
   const entry = zip.getEntry(filePath);
   if (!entry) return null;
   const base = path.join(os.tmpdir(), `ole_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
@@ -27,9 +27,19 @@ async function convertVectorToPng(zip: AdmZip, filePath: string): Promise<string
   const pngPath = `${base}.png`;
   try {
     fs.writeFileSync(srcPath, entry.getData());
-    await execFileAsync("wmf2gd", ["-t", "png", "--maxwidth=1200", "--maxpect", "-o", pngPath, srcPath], { timeout: 15000 });
+    // 预期显示宽度 px = pt × 96/72；栅格化时给 4 倍余量保证 trim 后仍清晰
+    const displayPx = wPt > 0 ? Math.round(wPt * 96 / 72) : 0;
+    const rasterW = displayPx > 0 ? Math.min(displayPx * 4, 1600) : 800;
+    await execFileAsync("wmf2gd", ["-t", "png", `--maxwidth=${rasterW}`, "--maxpect", "-o", pngPath, srcPath], { timeout: 15000 });
     const sharp = (await import("sharp")).default;
-    const buf = await sharp(pngPath).trim({ threshold: 15 }).png().toBuffer();
+    let img = sharp(pngPath).trim({ threshold: 15 });
+    if (displayPx > 0) {
+      // 缩到预期显示尺寸的 2 倍（清晰度足够且不会巨大）
+      img = img.resize({ width: displayPx * 2, withoutEnlargement: true });
+    } else {
+      img = img.resize({ width: 600, withoutEnlargement: true });
+    }
+    const buf = await img.png().toBuffer();
     return `data:image/png;base64,${buf.toString("base64")}`;
   } catch (e) {
     console.warn("[ole] 公式预览图转换失败:", filePath, e instanceof Error ? e.message : e);
@@ -47,9 +57,12 @@ async function resolveOleVectorImages(paragraphs: DocParagraph[], zip: AdmZip): 
     for (const run of para.runs || []) {
       if (run.type !== "image" || !run.src.startsWith("ole-vector://")) continue;
       total++;
-      const filePath = run.src.slice("ole-vector://".length);
-      if (!cache.has(filePath)) cache.set(filePath, await convertVectorToPng(zip, filePath));
-      const png = cache.get(filePath);
+      const rawPath = run.src.slice("ole-vector://".length);
+      const [filePath, qs] = rawPath.split("?");
+      const wPt = parseFloat(new URLSearchParams(qs || "").get("w") || "0");
+      const hPt = parseFloat(new URLSearchParams(qs || "").get("h") || "0");
+      if (!cache.has(rawPath)) cache.set(rawPath, await convertVectorToPng(zip, filePath, wPt, hPt));
+      const png = cache.get(rawPath);
       if (png) { run.src = png; ok++; }
       else { (run as unknown as { type: string; text: string }).type = "text"; (run as unknown as { text: string }).text = "[公式]"; }
     }
@@ -197,9 +210,16 @@ function extractParagraph(
         if (filePath) {
           flush();
           const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+          // v:shape style 里的 pt 尺寸 = Word 中的预期显示大小
+          let wPt = 0, hPt = 0;
+          const style = shape ? (attr(shape, "style") || "") : "";
+          const mH = /height:([\d.]+)pt/.exec(style);
+          const mW = /width:([\d.]+)pt/.exec(style);
+          if (mH) hPt = parseFloat(mH[1]);
+          if (mW) wPt = parseFloat(mW[1]);
           if (ext === "wmf" || ext === "emf") {
-            // 浏览器不认 wmf/emf：标记占位，解析完后统一转 PNG
-            runs.push({ type: "image", src: `ole-vector://${filePath}`, alt: "公式" });
+            // 浏览器不认 wmf/emf：标记占位（带尺寸），解析完后统一转 PNG
+            runs.push({ type: "image", src: `ole-vector://${filePath}?w=${wPt}&h=${hPt}`, alt: "公式" });
           } else {
             const imgRun = getImageRun(rId, "公式", undefined, undefined, imageMap, zip);
             if (imgRun) runs.push(imgRun);
