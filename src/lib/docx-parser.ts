@@ -10,6 +10,52 @@
 import AdmZip from "adm-zip";
 import { XMLParser } from "fast-xml-parser";
 import { ommlToLatex } from "./omml-to-latex";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import * as os from "node:os";
+import * as path from "node:path";
+import * as fs from "node:fs";
+
+const execFileAsync = promisify(execFile);
+
+/** OLE 公式预览图（wmf/emf）→ 高清 PNG data URL */
+async function convertVectorToPng(zip: AdmZip, filePath: string): Promise<string | null> {
+  const entry = zip.getEntry(filePath);
+  if (!entry) return null;
+  const base = path.join(os.tmpdir(), `ole_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+  const srcPath = `${base}.${filePath.split(".").pop() || "wmf"}`;
+  const pngPath = `${base}.png`;
+  try {
+    fs.writeFileSync(srcPath, entry.getData());
+    await execFileAsync("wmf2gd", ["-t", "png", "--maxwidth=1200", "--maxpect", "-o", pngPath, srcPath], { timeout: 15000 });
+    const sharp = (await import("sharp")).default;
+    const buf = await sharp(pngPath).trim({ threshold: 15 }).png().toBuffer();
+    return `data:image/png;base64,${buf.toString("base64")}`;
+  } catch (e) {
+    console.warn("[ole] 公式预览图转换失败:", filePath, e instanceof Error ? e.message : e);
+    return null;
+  } finally {
+    for (const f of [srcPath, pngPath]) { try { fs.unlinkSync(f); } catch { /* noop */ } }
+  }
+}
+
+/** 解析后处理：把所有 ole-vector:// 占位图统一转成 PNG */
+async function resolveOleVectorImages(paragraphs: DocParagraph[], zip: AdmZip): Promise<void> {
+  const cache = new Map<string, string | null>();
+  let total = 0, ok = 0;
+  for (const para of paragraphs) {
+    for (const run of para.runs || []) {
+      if (run.type !== "image" || !run.src.startsWith("ole-vector://")) continue;
+      total++;
+      const filePath = run.src.slice("ole-vector://".length);
+      if (!cache.has(filePath)) cache.set(filePath, await convertVectorToPng(zip, filePath));
+      const png = cache.get(filePath);
+      if (png) { run.src = png; ok++; }
+      else { (run as unknown as { type: string; text: string }).type = "text"; (run as unknown as { text: string }).text = "[公式]"; }
+    }
+  }
+  if (total > 0) console.log(`[ole] 旧版公式预览图转换：${ok}/${total} 成功`);
+}
 
 export interface TextRun {
   type: "text";
@@ -141,6 +187,26 @@ function extractParagraph(
       // e.g. inside mc:AlternateContent -> Choice -> drawing)
       const drawing = findDescendant(child, "drawing");
       const pict = findDescendant(child, "pict");
+      // 旧版公式编辑器（OLE 对象）：v:shape/v:imagedata 里的预览图就是公式
+      const oleObj = findDescendant(child, "object");
+      if (oleObj) {
+        const shape = findDescendant(oleObj, "shape");
+        const imgData = shape ? findDescendant(shape, "imagedata") : null;
+        const rId = imgData ? (attr(imgData, "id") || attrsOf(imgData)["@_r:id"] || "") : "";
+        const filePath = rId ? imageMap.get(rId) : undefined;
+        if (filePath) {
+          flush();
+          const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+          if (ext === "wmf" || ext === "emf") {
+            // 浏览器不认 wmf/emf：标记占位，解析完后统一转 PNG
+            runs.push({ type: "image", src: `ole-vector://${filePath}`, alt: "公式" });
+          } else {
+            const imgRun = getImageRun(rId, "公式", undefined, undefined, imageMap, zip);
+            if (imgRun) runs.push(imgRun);
+          }
+          continue;
+        }
+      }
       if (drawing || pict) {
         flush();
         const imgRun = drawing
@@ -387,7 +453,7 @@ function parseRelationships(zip: AdmZip): Map<string, string> {
 
 // ---- Main parser ----
 
-export function parseDocx(buffer: Buffer): DocContent {
+export async function parseDocx(buffer: Buffer): Promise<DocContent> {
   const zip = new AdmZip(buffer);
   const docEntry = zip.getEntry("word/document.xml");
   if (!docEntry) {
@@ -434,6 +500,7 @@ export function parseDocx(buffer: Buffer): DocContent {
   const body = findChild(docEl, "body");
   if (!body) return { paragraphs: [] };
 
+
   const paragraphs: DocParagraph[] = [];
 
   for (const child of childrenOf(body)) {
@@ -452,5 +519,6 @@ export function parseDocx(buffer: Buffer): DocContent {
   }
 
 
+  await resolveOleVectorImages(paragraphs, zip);
   return { paragraphs };
 }

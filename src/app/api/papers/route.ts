@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
       try {
         const buffer = Buffer.from(await file.arrayBuffer());
         const { parseDocx } = await import("@/lib/docx-parser");
-        const doc = parseDocx(buffer);
+        const doc = await parseDocx(buffer);
         for (const para of doc.paragraphs) {
           const text = para.runs
             .map((r) => r.type === "text" ? r.text : "")

@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    const content = parseDocx(buffer);
+    const content = await parseDocx(buffer);
 
     const imgCount = content.paragraphs.reduce(
       (n, p) => n + p.runs.filter((r) => r.type === "image").length, 0,
