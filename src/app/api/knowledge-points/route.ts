@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     if (search) {
       const knowledgePoints = await prisma.knowledgePoint.findMany({
         where: { name: { contains: search } },
-        include: { chapter: { select: { id: true, title: true, textbookId: true } } },
+        include: { chapter: { select: { id: true, title: true, textbookId: true } }, _count: { select: { problems: true } } },
         orderBy: { createdAt: "desc" },
         take: 50,
       });
@@ -27,6 +27,7 @@ export async function GET(request: NextRequest) {
     const knowledgePoints = await prisma.knowledgePoint.findMany({
       where: { chapterId: Number(chapterId) },
       orderBy: { sortOrder: "asc" },
+      include: { _count: { select: { problems: true } } },
     });
 
     return NextResponse.json({ data: knowledgePoints });

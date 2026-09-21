@@ -8,6 +8,18 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const knowledgePointId = searchParams.get("knowledgePointId");
     const search = searchParams.get("search");
+    const ids = searchParams.get("ids");
+
+    // 按 id 批量取（组卷导出用：篮子里的题可能来自多个知识点）
+    if (ids) {
+      const idList = ids.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n > 0);
+      if (idList.length === 0) return NextResponse.json({ data: [] });
+      const problems = await prisma.problem.findMany({
+        where: { id: { in: idList } },
+        include: { knowledgePoints: { include: { knowledgePoint: true } } },
+      });
+      return NextResponse.json({ data: problems });
+    }
 
     if (search) {
       const problems = await prisma.problem.findMany({
@@ -71,7 +83,7 @@ export async function POST(request: NextRequest) {
 
     const created = [];
     for (const item of body) {
-      const { content, difficulty, lessonTitle, questionType, sourceDate, knowledgePointIds } = item;
+      const { content, difficulty, lessonTitle, questionType, sourceDate, knowledgePointIds, answer } = item;
 
       if (!content || !knowledgePointIds || knowledgePointIds.length === 0) {
         return NextResponse.json(
@@ -84,11 +96,14 @@ export async function POST(request: NextRequest) {
       // 先用原始 content 算哈希（图片节点只是 "[图片]" 占位符），再把内联图片抽出入库
       const contentHash = computeContentHash(contentStr);
       const storedContent = await storeInlineImages(contentStr);
+      const answerStr = answer == null ? null : (typeof answer === "string" ? answer : JSON.stringify(answer));
+      const storedAnswer = answerStr && answerStr.trim() ? await storeInlineImages(answerStr) : null;
 
       const problem = await prisma.problem.create({
         data: {
           content: storedContent,
           contentHash,
+          answer: storedAnswer,
           difficulty: difficulty ?? 1,
           lessonTitle: lessonTitle ?? null,
           questionType: questionType ?? null,

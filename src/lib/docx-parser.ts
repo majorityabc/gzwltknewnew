@@ -37,6 +37,8 @@ export type ParagraphRun = TextRun | FormulaRun | ImageRun;
 export interface DocParagraph {
   runs: ParagraphRun[];
   style?: string;
+  /** 表格行（OCR 识别的表格）：每个元素是一列的 runs */
+  tableCells?: ParagraphRun[][];
 }
 
 export interface DocContent {

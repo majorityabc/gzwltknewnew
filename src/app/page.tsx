@@ -2,12 +2,17 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { ChapterTree } from "@/components/chapter-tree";
 import { KnowledgePointList } from "@/components/knowledge-point-list";
 import { ProblemList } from "@/components/problem-list";
 import type { ProblemItem } from "@/components/problem-list";
-import { ExamBasket } from "@/components/exam-basket";
+import { BasketView } from "@/components/exam-basket";
+import { PaperLibrary } from "@/components/paper-library";
 import type { BasketItem } from "@/components/exam-basket";
+
+import { VoiceInputButton, insertVoiceTextIntoEditor } from "@/components/voice-input-button";
+import { MathFormulaModal } from "@/components/math-formula-modal";
 
 const RichTextEditor = dynamic(
   () => import("@/components/tiptap/rich-text-editor").then((mod) => mod.RichTextEditor),
@@ -51,6 +56,10 @@ export default function HomePage() {
   const [selectedProblemId, setSelectedProblemId] = useState<number | null>(null);
   const [selectedProblem, setSelectedProblem] = useState<ProblemItem | null>(null);
   const [editContent, setEditContent] = useState("");
+  const [editAnswer, setEditAnswer] = useState("");
+  const answerEditorRef = useRef<import("@tiptap/react").Editor | null>(null);
+  const [mathModalOpen, setMathModalOpen] = useState(false);
+  const [editDirty, setEditDirty] = useState(false);
   const [editDifficulty, setEditDifficulty] = useState(3);
   const [editQuestionType, setEditQuestionType] = useState("");
   const [editSourceDate, setEditSourceDate] = useState("");
@@ -58,20 +67,16 @@ export default function HomePage() {
 
   // Edit page: notes & KP management
   const [editNotes, setEditNotes] = useState("");
-  const [savingNotes, setSavingNotes] = useState(false);
   const [kpSearchQuery, setKpSearchQuery] = useState("");
   const [kpSearchResults, setKpSearchResults] = useState<{ id: number; name: string; chapterId: number; chapter?: { id: number; title: string; textbookId: number } }[]>([]);
   const [showKpSearch, setShowKpSearch] = useState(false);
   const [addingKp, setAddingKp] = useState(false);
   const [kpError, setKpError] = useState<string | null>(null);
-  const [notesSaved, setNotesSaved] = useState(false);
-  const [notesEditing, setNotesEditing] = useState(false);
   const [kpSearching, setKpSearching] = useState(false);
   const kpSearchRef = useRef<HTMLDivElement>(null);
 
   // Basket state
   const [basketItems, setBasketItems] = useState<BasketItem[]>([]);
-  const [basketOpen, setBasketOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
   // Select chapter → clear KP and problem selections
@@ -100,7 +105,7 @@ export default function HomePage() {
       return;
     }
     setLoading(true);
-    fetch(`/api/problems?knowledgePointId=${selectedKpId}`)
+    fetch(`/tiku/api/problems?knowledgePointId=${selectedKpId}`)
       .then((r) => r.json())
       .then((d) => setProblems(d.data || []))
       .catch(() => setProblems([]))
@@ -111,7 +116,7 @@ export default function HomePage() {
   const refreshProblems = useCallback(() => {
     if (!selectedKpId) return;
     setLoading(true);
-    fetch(`/api/problems?knowledgePointId=${selectedKpId}`)
+    fetch(`/tiku/api/problems?knowledgePointId=${selectedKpId}`)
       .then((r) => r.json())
       .then((d) => setProblems(d.data || []))
       .catch(() => setProblems([]))
@@ -125,12 +130,12 @@ export default function HomePage() {
     setSelectedProblem(p);
     if (p) {
       setEditContent(p.content);
+      setEditAnswer(p.answer || "");
+      setEditDirty(false);
       setEditDifficulty(p.difficulty);
       setEditQuestionType(p.questionType || "");
       setEditSourceDate(p.sourceDate || "");
       setEditNotes(p.remarks || "");
-      setNotesEditing(false);
-      setNotesSaved(false);
       setKpSearchQuery("");
       setKpSearchResults([]);
       setShowKpSearch(false);
@@ -201,18 +206,27 @@ export default function HomePage() {
     if (!selectedProblemId) return;
     setSaving(true);
     try {
-      await fetch(`/api/problems/${selectedProblemId}`, {
+      const res = await fetch(`/tiku/api/problems/${selectedProblemId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content: editContent,
+          answer: editAnswer,
           difficulty: editDifficulty,
           questionType: editQuestionType || null,
           sourceDate: editSourceDate || null,
+          remarks: editNotes || null,
         }),
       });
+      if (!res.ok) {
+        alert("保存失败，请重试");
+        return;
+      }
+      setEditDirty(false);
+      setSelectedProblem((prev) => prev ? { ...prev, remarks: editNotes } : null);
+      setProblems((prev) => prev.map((p) => p.id === selectedProblemId ? { ...p, remarks: editNotes } : p));
       if (selectedKpId) {
-        const res = await fetch(`/api/problems?knowledgePointId=${selectedKpId}`);
+        const res = await fetch(`/tiku/api/problems?knowledgePointId=${selectedKpId}`);
         const d = await res.json();
         setProblems(d.data || []);
       }
@@ -221,12 +235,12 @@ export default function HomePage() {
     } finally {
       setSaving(false);
     }
-  }, [selectedProblemId, editContent, editDifficulty, editQuestionType, editSourceDate, selectedKpId]);
+  }, [selectedProblemId, editContent, editAnswer, editDifficulty, editQuestionType, editSourceDate, editNotes, selectedKpId]);
 
   // Delete problem
   const handleDelete = useCallback(async (id: number) => {
     try {
-      await fetch(`/api/problems/${id}`, { method: "DELETE" });
+      await fetch(`/tiku/api/problems/${id}`, { method: "DELETE" });
       setProblems((prev) => prev.filter((p) => p.id !== id));
       setBasketItems((prev) => prev.filter((x) => x.problemId !== id));
       if (selectedProblemId === id) {
@@ -238,25 +252,6 @@ export default function HomePage() {
     }
   }, [selectedProblemId]);
 
-  // Edit page: save notes
-  const handleSaveNotes = useCallback(async () => {
-    if (!selectedProblemId) return;
-    setSavingNotes(true);
-    const res = await fetch(`/api/problems/${selectedProblemId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ remarks: editNotes }),
-    });
-    if (res.ok) {
-      setSelectedProblem((prev) => prev ? { ...prev, remarks: editNotes } : null);
-      setProblems((prev) => prev.map((p) => p.id === selectedProblemId ? { ...p, remarks: editNotes } : p));
-      setNotesEditing(false);
-      setNotesSaved(true);
-      setTimeout(() => setNotesSaved(false), 2000);
-    }
-    setSavingNotes(false);
-  }, [selectedProblemId, editNotes]);
-
   // Edit page: search KPs
   const handleSearchKps = useCallback(async (query: string) => {
     if (!query.trim()) {
@@ -266,7 +261,7 @@ export default function HomePage() {
     setKpSearchResults([]);
     setKpSearching(true);
     try {
-      const res = await fetch(`/api/knowledge-points?search=${encodeURIComponent(query)}`);
+      const res = await fetch(`/tiku/api/knowledge-points?search=${encodeURIComponent(query)}`);
       const d = await res.json();
       setKpSearchResults(d.data || []);
     } finally {
@@ -281,7 +276,7 @@ export default function HomePage() {
     setAddingKp(true);
     setKpError(null);
     try {
-      const res = await fetch(`/api/problems/${pid}/knowledge-points`, {
+      const res = await fetch(`/tiku/api/problems/${pid}/knowledge-points`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ knowledgePointId: kpId }),
@@ -293,7 +288,7 @@ export default function HomePage() {
       }
       // Refetch to get updated knowledgePoints
       if (selectedKpId) {
-        const refreshRes = await fetch(`/api/problems?knowledgePointId=${selectedKpId}`);
+        const refreshRes = await fetch(`/tiku/api/problems?knowledgePointId=${selectedKpId}`);
         const refreshData = await refreshRes.json();
         const list = refreshData.data || [];
         setProblems(list);
@@ -318,7 +313,7 @@ export default function HomePage() {
     setKpError(null);
     try {
       // 1. Create the KP
-      const createRes = await fetch("/api/knowledge-points", {
+      const createRes = await fetch("/tiku/api/knowledge-points", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chapterId: selectedChapterId, name: kpSearchQuery.trim() }),
@@ -331,7 +326,7 @@ export default function HomePage() {
       const createData = await createRes.json();
       const newKpId = createData.data.id;
       // 2. Add it to the problem
-      const addRes = await fetch(`/api/problems/${pid}/knowledge-points`, {
+      const addRes = await fetch(`/tiku/api/problems/${pid}/knowledge-points`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ knowledgePointId: newKpId }),
@@ -342,7 +337,7 @@ export default function HomePage() {
       }
       // 3. Refetch to update state
       if (selectedKpId) {
-        const refreshRes = await fetch(`/api/problems?knowledgePointId=${selectedKpId}`);
+        const refreshRes = await fetch(`/tiku/api/problems?knowledgePointId=${selectedKpId}`);
         const refreshData = await refreshRes.json();
         const list = refreshData.data || [];
         setProblems(list);
@@ -364,12 +359,12 @@ export default function HomePage() {
     const pid = selectedProblem?.id ?? selectedProblemId;
     if (!pid) return;
     setKpError(null);
-    const res = await fetch(`/api/problems/${pid}/knowledge-points/${kpId}`, {
+    const res = await fetch(`/tiku/api/problems/${pid}/knowledge-points/${kpId}`, {
       method: "DELETE",
     }).catch(() => null);
     if (!res || !res.ok) return;
     if (selectedKpId) {
-      const refreshRes = await fetch(`/api/problems?knowledgePointId=${selectedKpId}`);
+      const refreshRes = await fetch(`/tiku/api/problems?knowledgePointId=${selectedKpId}`);
       const refreshData = await refreshRes.json();
       const list = refreshData.data || [];
       setProblems(list);
@@ -397,12 +392,27 @@ export default function HomePage() {
   }, []);
 
   // Export Word (Step 5)
-  const handleExport = useCallback(async () => {
+  const handleExport = useCallback(async (includeAnswers: boolean) => {
     if (basketItems.length === 0) return;
     setExporting(true);
     try {
+      // 篮子里的题可能来自多个知识点，当前列表只载了一个知识点的题——先批量补齐
+      const loadedIds = new Set(problems.map((p) => p.id));
+      const missingIds = basketItems.map((b) => b.problemId).filter((id) => !loadedIds.has(id));
+      let allProblems = problems;
+      if (missingIds.length > 0) {
+        const r = await fetch(`/tiku/api/problems?ids=${missingIds.join(",")}`);
+        const d = await r.json();
+        const fetched: typeof problems = d.data || [];
+        const fetchedIds = new Set(fetched.map((p) => p.id));
+        const stillMissing = missingIds.filter((id) => !fetchedIds.has(id));
+        if (stillMissing.length > 0) {
+          if (!window.confirm(`有 ${stillMissing.length} 道题数据缺失（可能已被删除），将在试卷中跳过。继续导出？`)) return;
+        }
+        allProblems = [...problems, ...fetched];
+      }
       const { exportProblemsToDocx } = await import("@/lib/export-docx");
-      await exportProblemsToDocx(problems, basketItems);
+      await exportProblemsToDocx(allProblems, basketItems, includeAnswers);
     } catch (e) {
       console.error("Export failed:", e);
       alert("导出失败，请重试");
@@ -413,8 +423,78 @@ export default function HomePage() {
 
   const QUESTION_TYPES = ["单选", "多选", "实验", "计算"];
 
+  const [view, setView] = useState<"problems" | "papers" | "basket">("problems");
+
   return (
     <div className="h-[calc(100vh-40px)] flex flex-col bg-gray-100 pb-10">
+      {/* 顶部：题目 / 试卷 切换 */}
+      <div className="px-4 pt-3 flex items-center gap-2">
+        <div className="inline-flex bg-white border rounded-lg overflow-hidden shadow-sm">
+          <button
+            onClick={() => setView("problems")}
+            className={`px-5 py-2 text-sm font-medium transition-colors ${
+              view === "problems" ? "bg-blue-500 text-white" : "text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            ✏️ 题目
+          </button>
+          <button
+            onClick={() => setView("papers")}
+            className={`px-5 py-2 text-sm font-medium transition-colors ${
+              view === "papers" ? "bg-blue-500 text-white" : "text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            📄 试卷
+          </button>
+        </div>
+        {view === "problems" && (
+          <div className="flex items-center gap-2 ml-auto">
+            <button
+              onClick={() => setView("basket")}
+              className="relative px-3 py-2 bg-white border rounded-lg shadow-sm hover:border-blue-300 transition-colors text-base leading-none"
+              title="组卷篮"
+            >
+              🧺
+              {basketItems.length > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+                  {basketItems.length}
+                </span>
+              )}
+            </button>
+            <Link
+              href="/"
+              className="px-4 py-2 bg-white border rounded-lg text-sm text-gray-600 hover:text-blue-600 hover:border-blue-300 shadow-sm transition-colors"
+            >
+              题库管理
+            </Link>
+            <Link
+              href="/upload"
+              className="px-4 py-2 bg-white border rounded-lg text-sm text-gray-600 hover:text-blue-600 hover:border-blue-300 shadow-sm transition-colors"
+            >
+              上传试卷
+            </Link>
+          </div>
+        )}
+      </div>
+
+      {view === "papers" ? (
+        <div className="flex-1 min-h-0 mt-2">
+          <PaperLibrary />
+        </div>
+      ) : view === "basket" ? (
+        <BasketView
+          items={basketItems}
+          problemMap={new Map(problems.map((p) => [p.id, p]))}
+          onRemove={handleRemoveFromBasket}
+          onClear={handleClearBasket}
+          onMoveUp={handleMoveUp}
+          onMoveDown={handleMoveDown}
+          onExport={handleExport}
+          exporting={exporting}
+          onBack={() => setView("problems")}
+        />
+      ) : (
+      <>
       {/* Main 3-column area */}
       <div className="flex-1 flex gap-0 overflow-hidden">
         {/* Left: Chapter tree */}
@@ -431,6 +511,7 @@ export default function HomePage() {
           <KnowledgePointList
             chapterId={selectedChapterId}
             chapterTitle={selectedChapterTitle}
+            textbookId={selectedTextbookId}
             selectedKpId={selectedKpId}
             onSelectKnowledgePoint={handleSelectKnowledgePoint}
           />
@@ -457,11 +538,66 @@ export default function HomePage() {
                   {/* Editor */}
                   <div className="bg-white border rounded-lg overflow-hidden">
                     <RichTextEditor
+                      key={`content-${selectedProblemId}`}
                       content={editContent}
                       editable={true}
-                      onChange={(html, json) => setEditContent(JSON.stringify(json))}
+                      onChange={(html, json) => { setEditContent(JSON.stringify(json)); setEditDirty(true); }}
                     />
                   </div>
+
+                  {/* 答案（可语音输入） */}
+                  <div className="bg-amber-50/60 border border-amber-200 rounded-lg overflow-hidden">
+                    <div className="px-4 pt-2.5 pb-1 flex items-center gap-2">
+                      <span className="text-xs text-amber-700 font-medium">答案</span>
+                      <VoiceInputButton
+                        onResult={(text) => {
+                          if (answerEditorRef.current) insertVoiceTextIntoEditor(answerEditorRef.current, text);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setMathModalOpen(true)}
+                        className="px-2.5 py-1 border rounded text-xs text-gray-600 hover:bg-gray-50"
+                      >
+                        ∑ 公式
+                      </button>
+                        <label className="px-2.5 py-1 border rounded text-xs text-gray-600 hover:bg-gray-50 cursor-pointer">
+                          🖼 图片
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const f = e.target.files?.[0];
+                              e.target.value = "";
+                              if (!f) return;
+                              const ed = answerEditorRef.current;
+                              if (!ed) return;
+                              const reader = new FileReader();
+                              reader.onloadend = () => ed.chain().focus().setImage({ src: reader.result as string }).run();
+                              reader.readAsDataURL(f);
+                            }}
+                          />
+                        </label>
+                    </div>
+                    <RichTextEditor
+                      key={`answer-${selectedProblemId}`}
+                      content={editAnswer}
+                      editable={true}
+                      plain
+                      onEditorReady={(editor) => { answerEditorRef.current = editor; }}
+                      onChange={(html, json) => { setEditAnswer(JSON.stringify(json)); setEditDirty(true); }}
+                    />
+                  </div>
+
+                  <MathFormulaModal
+                    open={mathModalOpen}
+                    onCancel={() => setMathModalOpen(false)}
+                    onConfirm={(latex) => {
+                      answerEditorRef.current?.chain().focus().setInlineMath(latex).run();
+                      setMathModalOpen(false);
+                    }}
+                  />
 
                   {/* Metadata editor */}
                   <div className="bg-white border rounded-lg p-4 space-y-4">
@@ -565,7 +701,7 @@ export default function HomePage() {
                         <input
                           type="date"
                           value={editSourceDate}
-                          onChange={(e) => setEditSourceDate(e.target.value)}
+                          onChange={(e) => { setEditSourceDate(e.target.value); setEditDirty(true); }}
                           className="mt-1 w-full border rounded px-2 py-1 text-xs"
                         />
                       </label>
@@ -574,7 +710,7 @@ export default function HomePage() {
                         难度
                         <select
                           value={editDifficulty}
-                          onChange={(e) => setEditDifficulty(Number(e.target.value))}
+                          onChange={(e) => { setEditDifficulty(Number(e.target.value)); setEditDirty(true); }}
                           className="mt-1 w-full border rounded px-2 py-1 text-xs"
                         >
                           {[1, 2, 3, 4, 5].map((d) => (
@@ -587,7 +723,7 @@ export default function HomePage() {
                         题型
                         <select
                           value={editQuestionType}
-                          onChange={(e) => setEditQuestionType(e.target.value)}
+                          onChange={(e) => { setEditQuestionType(e.target.value); setEditDirty(true); }}
                           className="mt-1 w-full border rounded px-2 py-1 text-xs"
                         >
                           <option value="">未设置</option>
@@ -603,47 +739,25 @@ export default function HomePage() {
                       <div className="text-xs text-gray-400 mb-1">备注：</div>
                       <textarea
                         value={editNotes}
-                        onChange={(e) => setEditNotes(e.target.value)}
-                        placeholder="暂无备注，点击下方按钮编辑..."
+                        onChange={(e) => { setEditNotes(e.target.value); setEditDirty(true); }}
+                        placeholder="可直接填写备注，随「保存修改」一起保存..."
                         rows={3}
-                        readOnly={!notesEditing}
-                        className={`w-full border rounded px-2 py-1.5 text-xs resize-y transition-colors ${
-                          notesEditing
-                            ? "bg-white border-gray-300"
-                            : "bg-gray-50 border-gray-200 cursor-default"
-                        }`}
+                        className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs resize-y bg-white"
                       />
-                      <div className="flex items-center gap-2 mt-1.5">
-                        {notesEditing ? (
-                          <button
-                            onClick={handleSaveNotes}
-                            disabled={savingNotes}
-                            className="text-xs px-3 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600 disabled:bg-gray-300 transition-colors"
-                          >
-                            {savingNotes ? "保存中..." : "保存备注"}
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => { setNotesEditing(true); setNotesSaved(false); }}
-                            className="text-xs px-3 py-1 text-gray-500 border rounded hover:bg-gray-50 transition-colors"
-                          >
-                            编辑备注
-                          </button>
-                        )}
-                        {notesSaved && !notesEditing && (
-                          <span className="text-xs text-green-600">✓ 已保存</span>
-                        )}
-                      </div>
                     </div>
 
                     {/* Actions */}
                     <div className="flex items-center gap-3 pt-2 border-t">
                       <button
                         onClick={handleSaveEdit}
-                        disabled={saving}
-                        className="px-4 py-1.5 bg-blue-500 text-white text-sm rounded hover:bg-blue-600 disabled:bg-gray-300 transition-colors"
+                        disabled={saving || !editDirty}
+                        className={`px-4 py-1.5 text-sm rounded transition-colors ${
+                          editDirty
+                            ? "bg-blue-500 text-white hover:bg-blue-600"
+                            : "bg-green-50 text-green-600 border border-green-300 cursor-default"
+                        } disabled:opacity-60`}
                       >
-                        {saving ? "保存中..." : "保存修改"}
+                        {saving ? "保存中..." : editDirty ? "保存修改" : "✓ 已保存"}
                       </button>
                       <button
                         onClick={() => {
@@ -694,19 +808,8 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Bottom: Exam basket */}
-      <ExamBasket
-        items={basketItems}
-        problemMap={new Map(problems.map((p) => [p.id, p]))}
-        onRemove={handleRemoveFromBasket}
-        onClear={handleClearBasket}
-        onMoveUp={handleMoveUp}
-        onMoveDown={handleMoveDown}
-        onExport={handleExport}
-        isOpen={basketOpen}
-        onToggle={() => setBasketOpen(!basketOpen)}
-        exporting={exporting}
-      />
+      </>
+      )}
     </div>
   );
 }

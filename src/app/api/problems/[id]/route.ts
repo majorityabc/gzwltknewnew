@@ -31,6 +31,10 @@ export async function PUT(
       }
       updateData.content = storedContent;
     }
+    if (body.answer !== undefined) {
+      const answerStr = body.answer == null ? null : (typeof body.answer === "string" ? body.answer : JSON.stringify(body.answer));
+      updateData.answer = answerStr && answerStr.trim() ? await storeInlineImages(answerStr) : null;
+    }
     if (body.difficulty !== undefined) {
       updateData.difficulty = Number(body.difficulty);
     }

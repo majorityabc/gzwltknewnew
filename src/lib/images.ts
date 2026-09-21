@@ -7,7 +7,7 @@ interface TipTapLikeNode {
 }
 
 const DATA_URL_RE = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/;
-const IMAGE_REF_RE = /^\/api\/images\/([^/?#]+)$/;
+const IMAGE_REF_RE = /^(?:\/tiku)?\/api\/images\/([^/?#]+)$/;
 
 /**
  * 遍历 TipTap JSON，把 src 为 data URL 的 image 节点抽出来存入 ProblemImage 表，
@@ -32,7 +32,7 @@ export async function storeInlineImages(contentJson: string): Promise<string> {
         const image = await prisma.problemImage.create({
           data: { mimeType: match[1], data: match[2] },
         });
-        n.attrs.src = `/api/images/${image.id}`;
+        n.attrs.src = `/tiku/api/images/${image.id}`;
       }
     }
 

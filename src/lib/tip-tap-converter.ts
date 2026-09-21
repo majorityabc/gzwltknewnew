@@ -47,7 +47,33 @@ function runToInline(run: ParagraphRun): TipTapNode | null {
 export function docParagraphsToTipTapJson(paragraphs: DocParagraph[]): object {
   const content: TipTapNode[] = [];
 
+  // 连续的表格行段落 → 一个 TipTap 表格节点（首行为表头）
+  let tableBuffer: ParagraphRun[][][] = [];
+  function flushTable() {
+    if (!tableBuffer.length) return;
+    const colCount = Math.max(...tableBuffer.map((r) => r.length));
+    const rows = tableBuffer.map((cells, ri) => ({
+      type: "tableRow",
+      content: Array.from({ length: colCount }, (_, ci) => {
+        const cellRuns = cells[ci] || [];
+        const inlines = cellRuns.map(runToInline).filter(Boolean) as TipTapNode[];
+        return {
+          type: ri === 0 ? "tableHeader" : "tableCell",
+          content: [inlines.length ? { type: "paragraph", content: inlines } : { type: "paragraph" }],
+        };
+      }),
+    }));
+    content.push({ type: "table", content: rows });
+    tableBuffer = [];
+  }
+
   for (const para of paragraphs) {
+    if (para.tableCells && para.tableCells.length) {
+      tableBuffer.push(para.tableCells);
+      continue;
+    }
+    flushTable();
+
     const inlines = para.runs.map(runToInline).filter(Boolean) as TipTapNode[];
 
     // Skip empty paragraphs
@@ -61,6 +87,7 @@ export function docParagraphsToTipTapJson(paragraphs: DocParagraph[]): object {
       content: inlines,
     });
   }
+  flushTable();
 
   // If no content, add an empty paragraph to avoid empty editor error
   if (!content.length) {

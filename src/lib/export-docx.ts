@@ -9,6 +9,10 @@ import {
   AlignmentType,
   BorderStyle,
   Math as OMMLMath,
+  Table as DocxTable,
+  TableRow as DocxTableRow,
+  TableCell as DocxTableCell,
+  WidthType,
 } from "docx";
 
 // ---- types ----
@@ -29,6 +33,7 @@ export interface ProblemItem {
   questionType: string | null;
   sourceDate: string | null;
   remarks: string | null;
+  answer?: string | null;
   knowledgePoints: { knowledgePoint: { id: number; name: string } }[];
 }
 
@@ -74,6 +79,49 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 // ---- TipTap JSON → docx children ----
 
 const MAX_PAGE_WIDTH_PX = 460;
+
+// ---- 导出排版：题干 / 图片 / 选项·小问 分类 ----
+
+function nodePlainText(node: TipTapNode): string {
+  let out = node.text || "";
+  if (Array.isArray(node.content)) {
+    for (const child of node.content) out += nodePlainText(child);
+  }
+  return out;
+}
+
+/** 选项行：A. / A、/ A．/ A) / A： 等（仅限单字母 A–D 开头） */
+const OPTION_LINE_RE = /^\s*[A-D][.、．:：)）]/;
+/** 小问行：（1）/ (1) / ① 等 */
+const SUB_QUESTION_RE = /^\s*[（(]\s*\d+\s*[）)]|^\s*[①-⑳]/;
+
+export function isOptionLine(text: string): boolean {
+  return OPTION_LINE_RE.test(text);
+}
+
+export function isSubQuestionLine(text: string): boolean {
+  return SUB_QUESTION_RE.test(text);
+}
+
+/** 把 block 里的 image 行内节点抽出来，返回去图后的 block 和图片节点列表 */
+function splitOutImages(block: TipTapNode): {
+  stripped: TipTapNode;
+  images: TipTapNode[];
+} {
+  const images: TipTapNode[] = [];
+  const copy = JSON.parse(JSON.stringify(block)) as TipTapNode;
+  const walk = (nodes: TipTapNode[]): TipTapNode[] =>
+    nodes.filter((n) => {
+      if (n.type === "image") {
+        images.push(n);
+        return false;
+      }
+      if (Array.isArray(n.content)) n.content = walk(n.content);
+      return true;
+    });
+  if (Array.isArray(copy.content)) copy.content = walk(copy.content);
+  return { stripped: copy, images };
+}
 
 type ParagraphInlineChild = TextRun | ImageRun | OMMLMath;
 
@@ -190,13 +238,14 @@ async function tipTapNodeToInlineChildren(
 export async function exportProblemsToDocx(
   problems: ProblemItem[],
   basketItems: BasketItem[],
+  includeAnswers = false,
 ): Promise<void> {
   // Wait for MathJax to initialize (loads fonts + macros)
   await mathJaxReady();
 
   const problemMap = new Map(problems.map((p) => [p.id, p]));
   const ordered = [...basketItems].sort((a, b) => a.order - b.order);
-  const docChildren: Paragraph[] = [];
+  const docChildren: (Paragraph | DocxTable)[] = [];
 
   docChildren.push(
     new Paragraph({
@@ -212,76 +261,137 @@ export async function exportProblemsToDocx(
     const problem = problemMap.get(item.problemId);
     if (!problem) continue;
 
-    const headerParts: string[] = [];
-    headerParts.push(`第 ${i + 1} 题`);
-    if (item.textbookName) headerParts.push(item.textbookName);
-    if (item.chapterTitle) headerParts.push(item.chapterTitle);
-    if (item.knowledgePointName) headerParts.push(item.knowledgePointName);
-
-    const metaParts: string[] = [];
-    metaParts.push(`难度：${"★".repeat(problem.difficulty)}`);
-    if (problem.questionType) metaParts.push(`题型：${problem.questionType}`);
-    if (problem.sourceDate) metaParts.push(`来源：${problem.sourceDate}`);
-
-    docChildren.push(
-      new Paragraph({
-        spacing: { before: 300, after: 100 },
-        children: [
-          new TextRun({
-            text: headerParts.join(" · "),
-            bold: true,
-            size: 26,
-            font: "SimHei",
-          }),
-        ],
-      }),
-      new Paragraph({
-        spacing: { after: 200 },
-        children: [
-          new TextRun({
-            text: metaParts.join(" ｜ "),
-            size: 20,
-            color: "666666",
-            font: "SimSun",
-          }),
-        ],
-      }),
-    );
-
     // --- Problem content ---
     try {
       const doc = JSON.parse(problem.content);
       const blockNodes: TipTapNode[] = doc.content || [];
 
+      // 按版式要求分三组：题干文字 → 图片 → 选项/小问
+      const stemBlocks: TipTapNode[] = [];
+      const tailBlocks: TipTapNode[] = [];
+      const imageNodes: TipTapNode[] = [];
+
       for (const block of blockNodes) {
-        const isHeading = block.type === "heading";
-        const level = (block.attrs?.level as number) || 1;
-
-        const children = await tipTapNodeToInlineChildren(block);
-
-        if (children.length === 0) {
-          docChildren.push(new Paragraph({ spacing: { after: 120 } }));
-          continue;
+        const { stripped, images } = splitOutImages(block);
+        imageNodes.push(...images);
+        if (!nodePlainText(stripped).trim()) continue; // 纯图片段
+        const text = nodePlainText(block);
+        if (isOptionLine(text) || isSubQuestionLine(text)) {
+          tailBlocks.push(stripped);
+        } else {
+          stemBlocks.push(stripped);
         }
+      }
 
-        const headingMapping: Record<
-          number,
-          (typeof HeadingLevel)[keyof typeof HeadingLevel]
-        > = {
-          1: HeadingLevel.HEADING_1,
-          2: HeadingLevel.HEADING_2,
-          3: HeadingLevel.HEADING_3,
-        };
+      const headingMapping: Record<
+        number,
+        (typeof HeadingLevel)[keyof typeof HeadingLevel]
+      > = {
+        1: HeadingLevel.HEADING_1,
+        2: HeadingLevel.HEADING_2,
+        3: HeadingLevel.HEADING_3,
+      };
 
-        docChildren.push(
-          new Paragraph({
-            spacing: { after: 120 },
-            heading: isHeading
-              ? headingMapping[level as number] || HeadingLevel.HEADING_3
-              : undefined,
-            children,
-          }),
-        );
+      const renderBlocks = async (blocks: TipTapNode[]) => {
+        for (const block of blocks) {
+          // 表格节点 → Word 表格（带边框）
+          if (block.type === "table") {
+            const rows = (block.content || []).filter((r) => r.type === "tableRow");
+            const docxRows: DocxTableRow[] = [];
+            for (const row of rows) {
+              const cells = (row.content || []) as TipTapNode[];
+              if (!cells.length) continue;
+              const cellNodes: DocxTableCell[] = [];
+              for (const cell of cells) {
+                const inlineChildren: ParagraphInlineChild[] = [];
+                for (const cellBlock of cell.content || []) {
+                  const ch = await tipTapNodeToInlineChildren(cellBlock);
+                  inlineChildren.push(...ch);
+                }
+                cellNodes.push(
+                  new DocxTableCell({
+                    children: [new Paragraph({ children: inlineChildren })],
+                  }),
+                );
+              }
+              docxRows.push(new DocxTableRow({ children: cellNodes }));
+            }
+            if (docxRows.length > 0) {
+              docChildren.push(
+                new DocxTable({
+                  rows: docxRows,
+                  width: { size: 100, type: WidthType.PERCENTAGE },
+                  borders: {
+                    top: { style: BorderStyle.SINGLE, size: 1, color: "999999" },
+                    bottom: { style: BorderStyle.SINGLE, size: 1, color: "999999" },
+                    left: { style: BorderStyle.SINGLE, size: 1, color: "999999" },
+                    right: { style: BorderStyle.SINGLE, size: 1, color: "999999" },
+                    insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+                    insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+                  },
+                }),
+              );
+            }
+            continue;
+          }
+
+          const isHeading = block.type === "heading";
+          const level = (block.attrs?.level as number) || 1;
+
+          const children = await tipTapNodeToInlineChildren(block);
+
+          if (children.length === 0) {
+            docChildren.push(new Paragraph({ spacing: { after: 120 } }));
+            continue;
+          }
+
+          docChildren.push(
+            new Paragraph({
+              spacing: { after: 120 },
+              heading: isHeading
+                ? headingMapping[level as number] || HeadingLevel.HEADING_3
+                : undefined,
+              children,
+            }),
+          );
+        }
+      };
+
+      // 1) 题干：所有文字行在一起
+      await renderBlocks(stemBlocks);
+
+      // 2) 题目图片：集中居中排版
+      for (const img of imageNodes) {
+        const children = await tipTapNodeToInlineChildren(img);
+        if (children.length > 0) {
+          docChildren.push(
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              spacing: { after: 120 },
+              children,
+            }),
+          );
+        }
+      }
+
+      // 3) 选项（选择题）/ 小问（解答题）
+      await renderBlocks(tailBlocks);
+
+      // 4) 答案（可选）
+      if (includeAnswers && problem.answer) {
+        try {
+          const adoc = JSON.parse(problem.answer);
+          const ablocks = (adoc.content || []) as TipTapNode[];
+          if (ablocks.some((b) => nodePlainText(b).trim() || b.type === "image")) {
+            docChildren.push(
+              new Paragraph({
+                spacing: { before: 80, after: 60 },
+                children: [new TextRun({ text: "【答案】", bold: true, color: "2F5496", size: 24 })],
+              }),
+            );
+            await renderBlocks(ablocks);
+          }
+        } catch { /* 答案解析失败则跳过 */ }
       }
     } catch {
       docChildren.push(
@@ -365,6 +475,148 @@ export async function exportProblemsToDocx(
   const a = document.createElement("a");
   a.href = url;
   a.download = `高中物理组卷_${new Date().toISOString().slice(0, 10)}.docx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+
+// ---- 拍照转 Word：整卷不入库直接导出（客户端生成下载，复用上面的渲染函数）----
+export async function exportBlocksToDocxDownload(
+  title: string,
+  blockNodes: TipTapNode[],
+): Promise<void> {
+  await mathJaxReady();
+
+  const docChildren: (Paragraph | DocxTable)[] = [];
+
+  // 卷头：标题 + 日期
+  docChildren.push(
+    new Paragraph({
+      text: title || "试卷",
+      heading: HeadingLevel.TITLE,
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+    }),
+  );
+  docChildren.push(
+    new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 400 },
+      children: [
+        new TextRun({
+          text: new Date().toISOString().slice(0, 10),
+          size: 20,
+          color: "888888",
+        }),
+      ],
+    }),
+  );
+
+  const headingMapping: Record<number, (typeof HeadingLevel)[keyof typeof HeadingLevel]> = {
+    1: HeadingLevel.HEADING_1,
+    2: HeadingLevel.HEADING_2,
+    3: HeadingLevel.HEADING_3,
+  };
+
+  for (const block of blockNodes) {
+    // 表格 → 带边框 Word 表格
+    if (block.type === "table") {
+      const rows = (block.content || []).filter((r) => r.type === "tableRow");
+      const docxRows: DocxTableRow[] = [];
+      for (const row of rows) {
+        const cells = (row.content || []) as TipTapNode[];
+        if (!cells.length) continue;
+        const cellNodes: DocxTableCell[] = [];
+        for (const cell of cells) {
+          const inlineChildren: ParagraphInlineChild[] = [];
+          for (const cellBlock of cell.content || []) {
+            const ch = await tipTapNodeToInlineChildren(cellBlock);
+            inlineChildren.push(...ch);
+          }
+          cellNodes.push(
+            new DocxTableCell({
+              children: [new Paragraph({ children: inlineChildren })],
+            }),
+          );
+        }
+        docxRows.push(new DocxTableRow({ children: cellNodes }));
+      }
+      if (docxRows.length > 0) {
+        docChildren.push(
+          new DocxTable({
+            rows: docxRows,
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            borders: {
+              top: { style: BorderStyle.SINGLE, size: 1, color: "999999" },
+              bottom: { style: BorderStyle.SINGLE, size: 1, color: "999999" },
+              left: { style: BorderStyle.SINGLE, size: 1, color: "999999" },
+              right: { style: BorderStyle.SINGLE, size: 1, color: "999999" },
+              insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+            },
+          }),
+        );
+      }
+      continue;
+    }
+
+    // 图片段 → 居中
+    const plain = nodePlainText(block).trim();
+    const isImageBlock =
+      !plain &&
+      JSON.stringify(block).includes('"image"');
+    if (isImageBlock) {
+      const children = await tipTapNodeToInlineChildren(block);
+      if (children.length > 0) {
+        docChildren.push(
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 120 },
+            children,
+          }),
+        );
+      }
+      continue;
+    }
+
+    const isHeading = block.type === "heading";
+    const level = (block.attrs?.level as number) || 1;
+    const children = await tipTapNodeToInlineChildren(block);
+    if (children.length === 0) {
+      docChildren.push(new Paragraph({ spacing: { after: 120 } }));
+      continue;
+    }
+    docChildren.push(
+      new Paragraph({
+        spacing: { after: 120 },
+        heading: isHeading
+          ? headingMapping[level as number] || HeadingLevel.HEADING_3
+          : undefined,
+        children,
+      }),
+    );
+  }
+
+  const doc = new Document({
+    sections: [
+      {
+        properties: {
+          page: { margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 } },
+        },
+        children: docChildren,
+      },
+    ],
+  });
+
+  const blob = await Packer.toBlob(doc);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${(title || "试卷").replace(/[\\/:*?"<>|]/g, "_")}_${new Date()
+    .toISOString()
+    .slice(0, 10)}.docx`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

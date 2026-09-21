@@ -12,6 +12,7 @@ interface Chapter {
   textbookId: number;
   parentId: number | null;
   title: string;
+  sortOrder: number;
 }
 
 interface ChapterTreeProps {
@@ -26,14 +27,14 @@ export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChan
   const [chapters, setChapters] = useState<Chapter[]>([]);
 
   const fetchTextbooks = useCallback(() => {
-    fetch("/api/textbooks")
+    fetch("/tiku/api/textbooks")
       .then((r) => r.json())
       .then((d) => setTextbooks(d.data || []))
       .catch(() => {});
   }, []);
 
   const fetchChapters = useCallback((textbookId: number) => {
-    fetch(`/api/chapters?textbookId=${textbookId}`)
+    fetch(`/tiku/api/chapters?textbookId=${textbookId}`)
       .then((r) => r.json())
       .then((d) => setChapters(d.data || []))
       .catch(() => {});
@@ -54,7 +55,7 @@ export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChan
   const handleAddTextbook = async () => {
     const name = window.prompt("请输入新课本的名称：");
     if (!name || !name.trim()) return;
-    const res = await fetch("/api/textbooks", {
+    const res = await fetch("/tiku/api/textbooks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name.trim() }),
@@ -72,7 +73,7 @@ export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChan
     if (!selectedTextbook) return;
     const name = window.prompt("新的课本名称：", selectedTextbook.name);
     if (!name || !name.trim() || name.trim() === selectedTextbook.name) return;
-    const res = await fetch(`/api/textbooks/${selectedTextbook.id}`, {
+    const res = await fetch(`/tiku/api/textbooks/${selectedTextbook.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name.trim() }),
@@ -90,7 +91,7 @@ export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChan
   const handleDeleteTextbook = async () => {
     if (!selectedTextbook) return;
     if (!window.confirm(`确定删除课本「${selectedTextbook.name}」吗？将同时删除该课本下的所有章节、课时和知识点（题目本身保留），此操作无法撤销。`)) return;
-    const res = await fetch(`/api/textbooks/${selectedTextbook.id}`, {
+    const res = await fetch(`/tiku/api/textbooks/${selectedTextbook.id}`, {
       method: "DELETE",
     }).catch(() => null);
     if (!res || !res.ok) {
@@ -110,7 +111,7 @@ export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChan
     if (!selectedTextbookId) return;
     const title = window.prompt("请输入新章节的标题：");
     if (!title || !title.trim()) return;
-    const res = await fetch("/api/chapters", {
+    const res = await fetch("/tiku/api/chapters", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ textbookId: selectedTextbookId, title: title.trim() }),
@@ -123,11 +124,40 @@ export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChan
     fetchChapters(selectedTextbookId);
   };
 
+  // 手动调序：上移/下移（交换 sortOrder）
+  const handleMoveChapter = async (ch: Chapter, dir: -1 | 1) => {
+    const idx = chapters.findIndex((c) => c.id === ch.id);
+    const j = idx + dir;
+    if (j < 0 || j >= chapters.length) return;
+    const a = chapters[idx];
+    const b = chapters[j];
+    let sa = a.sortOrder;
+    let sb = b.sortOrder;
+    if (sa === sb) { sa = idx + 1; sb = j + 1; } // 老的并列值：用位置值兜底
+    const [r1, r2] = await Promise.all([
+      fetch(`/tiku/api/chapters/${a.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sortOrder: sb }),
+      }).catch(() => null),
+      fetch(`/tiku/api/chapters/${b.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sortOrder: sa }),
+      }).catch(() => null),
+    ]);
+    if (!r1?.ok || !r2?.ok) {
+      alert("调整顺序失败，请重试");
+      return;
+    }
+    if (selectedTextbookId) fetchChapters(selectedTextbookId);
+  };
+
   // 重命名章节
   const handleRenameChapter = async (ch: Chapter) => {
     const title = window.prompt("新的章节标题：", ch.title);
     if (!title || !title.trim() || title.trim() === ch.title) return;
-    const res = await fetch(`/api/chapters/${ch.id}`, {
+    const res = await fetch(`/tiku/api/chapters/${ch.id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title: title.trim() }),
@@ -145,7 +175,7 @@ export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChan
   // 删除章节
   const handleDeleteChapter = async (ch: Chapter) => {
     if (!window.confirm(`确定删除章节「${ch.title}」吗？将同时删除该章节下的所有课时和知识点（题目本身保留），此操作无法撤销。`)) return;
-    const res = await fetch(`/api/chapters/${ch.id}`, {
+    const res = await fetch(`/tiku/api/chapters/${ch.id}`, {
       method: "DELETE",
     }).catch(() => null);
     if (!res || !res.ok) {
@@ -185,31 +215,6 @@ export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChan
           ))}
         </select>
 
-        {/* Textbook management */}
-        <div className="flex gap-3 mt-2 text-xs">
-          <button
-            onClick={handleAddTextbook}
-            className="text-blue-500 hover:text-blue-700 transition-colors"
-          >
-            + 新增课本
-          </button>
-          {selectedTextbook && (
-            <>
-              <button
-                onClick={handleRenameTextbook}
-                className="text-gray-400 hover:text-blue-600 transition-colors"
-              >
-                重命名课本
-              </button>
-              <button
-                onClick={handleDeleteTextbook}
-                className="text-gray-400 hover:text-red-500 transition-colors"
-              >
-                删除课本
-              </button>
-            </>
-          )}
-        </div>
       </div>
 
       {/* Chapter list */}
@@ -241,19 +246,26 @@ export function ChapterTree({ selectedChapterId, onSelectChapter, onTextbookChan
               >
                 {ch.title}
               </button>
+              <span className="flex flex-col mr-0.5 opacity-50 hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => handleMoveChapter(ch, -1)}
+                  disabled={chapters.findIndex((c) => c.id === ch.id) === 0}
+                  title="上移"
+                  className="text-[10px] leading-none text-gray-400 hover:text-blue-500 disabled:text-gray-200 px-1"
+                >▲</button>
+                <button
+                  onClick={() => handleMoveChapter(ch, 1)}
+                  disabled={chapters.findIndex((c) => c.id === ch.id) === chapters.length - 1}
+                  title="下移"
+                  className="text-[10px] leading-none text-gray-400 hover:text-blue-500 disabled:text-gray-200 px-1"
+                >▼</button>
+              </span>
               <button
                 onClick={() => handleRenameChapter(ch)}
-                className="px-1 text-xs text-gray-400 hover:text-blue-600 transition-colors"
-                title="重命名章节"
+                title="重命名章节（题目和知识点保持绑定不变）"
+                className="px-2 py-1 text-xs text-gray-300 hover:text-blue-500 opacity-60 hover:opacity-100 transition-all"
               >
-                改名
-              </button>
-              <button
-                onClick={() => handleDeleteChapter(ch)}
-                className="px-1 pr-2 text-xs text-gray-400 hover:text-red-500 transition-colors"
-                title="删除章节"
-              >
-                删除
+                ✏️
               </button>
             </div>
           );

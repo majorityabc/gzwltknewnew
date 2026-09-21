@@ -8,6 +8,7 @@ import Superscript from "@tiptap/extension-superscript";
 import Subscript from "@tiptap/extension-subscript";
 import Underline from "@tiptap/extension-underline";
 import ImageExt from "@tiptap/extension-image";
+import { Table, TableRow, TableCell, TableHeader } from "@tiptap/extension-table";
 import { InlineMath } from "./math-extension";
 
 const FORMULA_CLASS = "formula-placeholder";
@@ -71,6 +72,14 @@ function cleanPastedHtml(html: string, imageDataUrls: string[]): string {
   return body;
 }
 
+function fileToDataUrl(file: File | Blob): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.readAsDataURL(file);
+  });
+}
+
 async function readClipboardImages(): Promise<string[]> {
   try {
     const items = await navigator.clipboard.read();
@@ -128,6 +137,10 @@ export function RichTextEditor({
         inline: true,
         allowBase64: true,
       }),
+      Table.configure({ resizable: false }),
+      TableRow,
+      TableCell,
+      TableHeader,
       InlineMath,
     ],
     content: content ? JSON.parse(content) : "",
@@ -137,7 +150,22 @@ export function RichTextEditor({
         class: "tiptap-editor max-w-none focus:outline-none p-4",
       },
       handlePaste: (view, event) => {
-        const html = event.clipboardData?.getData("text/html");
+        // 纯图片粘贴（如截图）：clipboardData 里没有 html，只有文件
+        const cd = event.clipboardData;
+        const imageFiles = Array.from(cd?.files || []).filter((f) =>
+          f.type.startsWith("image/"),
+        );
+        if (imageFiles.length > 0) {
+          event.preventDefault();
+          (async () => {
+            for (const f of imageFiles) {
+              const dataUrl = await fileToDataUrl(f);
+              editor?.chain().focus().setImage({ src: dataUrl }).run();
+            }
+          })();
+          return true;
+        }
+        const html = cd?.getData("text/html");
         if (!html) return false;
 
         event.preventDefault();

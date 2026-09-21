@@ -14,6 +14,7 @@ model Textbook {
   sortOrder Int       @default(0) @map("sort_order")
   createdAt DateTime  @default(now()) @map("created_at")
   chapters  Chapter[]
+  papers    Paper[]
 
   @@map("textbooks")
 }
@@ -66,6 +67,7 @@ model Problem {
   questionType   String?                  @map("question_type") // 题型：单选/多选/实验/计算
   sourceDate     String?                  @map("source_date")   // 题目来源日期，如"2024-06-07"
   remarks        String?                                               // 备注
+  answer         String?                                               // 答案（TipTap JSON）
   createdAt      DateTime                 @default(now()) @map("created_at")
   knowledgePoints ProblemKnowledgePoint[]
 
@@ -90,4 +92,21 @@ model ProblemKnowledgePoint {
 
   @@id([problemId, knowledgePointId])
   @@map("problem_knowledge_points")
+}
+
+// 试卷库：整卷存档（Word / PDF 原文件）
+model Paper {
+  id         Int       @id @default(autoincrement())
+  title      String
+  paperType  String    @default("其他") // 单元测试 / 月考 / 期中 / 期末 / 其他
+  remarks    String?
+  fileName   String
+  fileSize   Int
+  fileType   String    @default("docx") // docx | pdf
+  downloadCount Int     @default(0) // 下载次数
+  fileData   String // base64 文件本体
+  textbookId Int?
+  textbook   Textbook? @relation(fields: [textbookId], references: [id])
+  shareToken String?   @unique // 公开分享暗号，凭此可免登录下载
+  createdAt  DateTime  @default(now())
 }

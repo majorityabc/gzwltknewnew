@@ -7,11 +7,13 @@ interface KnowledgePoint {
   name: string;
   chapterId: number;
   chapter?: { id: number; title: string; textbookId: number };
+  _count?: { problems: number };
 }
 
 interface KnowledgePointListProps {
   chapterId: number | null;
   chapterTitle: string | null;
+  textbookId: number | null;
   selectedKpId: number | null;
   onSelectKnowledgePoint: (id: number, name: string) => void;
 }
@@ -19,9 +21,15 @@ interface KnowledgePointListProps {
 export function KnowledgePointList({
   chapterId,
   chapterTitle,
+  textbookId,
   selectedKpId,
   onSelectKnowledgePoint,
 }: KnowledgePointListProps) {
+  const [editingKpId, setEditingKpId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editChapterId, setEditChapterId] = useState<number | null>(null);
+  const [chapters, setChapters] = useState<{ id: number; title: string }[]>([]);
+  const [savingEdit, setSavingEdit] = useState(false);
   const [chapterKps, setChapterKps] = useState<KnowledgePoint[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<KnowledgePoint[]>([]);
@@ -39,7 +47,7 @@ export function KnowledgePointList({
       return;
     }
     try {
-      const r = await fetch(`/api/knowledge-points?chapterId=${chapterId}`);
+      const r = await fetch(`/tiku/api/knowledge-points?chapterId=${chapterId}`);
       const d = await r.json();
       setChapterKps(d.data || []);
     } catch {
@@ -49,11 +57,48 @@ export function KnowledgePointList({
 
   useEffect(() => { loadChapterKps(); }, [loadChapterKps]);
 
+  const startEdit = useCallback(async (kp: KnowledgePoint) => {
+    setEditingKpId(kp.id);
+    setEditName(kp.name);
+    setEditChapterId(kp.chapterId);
+    if (textbookId && chapters.length === 0) {
+      try {
+        const r = await fetch(`/tiku/api/chapters?textbookId=${textbookId}`);
+        const d = await r.json();
+        setChapters(d.data || []);
+      } catch { /* 忽略 */ }
+    }
+  }, [textbookId, chapters.length]);
+
+  const handleSaveEdit = useCallback(async () => {
+    if (editingKpId === null || !editName.trim()) return;
+    setSavingEdit(true);
+    try {
+      const r = await fetch(`/tiku/api/knowledge-points/${editingKpId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editName.trim(), chapterId: editChapterId }),
+      });
+      if (!r.ok) { alert("保存失败，请重试"); return; }
+      if (editChapterId !== chapterId) {
+        // 移到了别的章节：从当前列表移除
+        setChapterKps((prev) => prev.filter((k) => k.id !== editingKpId));
+      } else {
+        setChapterKps((prev) => prev.map((k) => k.id === editingKpId ? { ...k, name: editName.trim() } : k));
+      }
+      setEditingKpId(null);
+    } catch {
+      alert("保存失败，请重试");
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [editingKpId, editName, editChapterId, chapterId]);
+
   const handleDelete = useCallback(async (kpId: number) => {
     if (!window.confirm("确定删除该知识点？关联的题目将保留（仅移除标签关联）。")) return;
     setDeletingId(kpId);
     try {
-      await fetch(`/api/knowledge-points/${kpId}`, { method: "DELETE" });
+      await fetch(`/tiku/api/knowledge-points/${kpId}`, { method: "DELETE" });
       setChapterKps((prev) => prev.filter((kp) => kp.id !== kpId));
       setSearchResults((prev) => prev.filter((kp) => kp.id !== kpId));
       if (selectedKpId === kpId) {
@@ -70,7 +115,7 @@ export function KnowledgePointList({
     if (!newKpName.trim() || !chapterId) return;
     setSavingKp(true);
     try {
-      await fetch("/api/knowledge-points", {
+      await fetch("/tiku/api/knowledge-points", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chapterId, name: newKpName.trim() }),
@@ -90,7 +135,7 @@ export function KnowledgePointList({
       setSearchResults([]);
       return;
     }
-    const res = await fetch(`/api/knowledge-points?search=${encodeURIComponent(query)}`);
+    const res = await fetch(`/tiku/api/knowledge-points?search=${encodeURIComponent(query)}`);
     const d = await res.json();
     setSearchResults(d.data || []);
   }, []);
@@ -237,10 +282,47 @@ export function KnowledgePointList({
 
         {displayKps.map((kp) => {
           const isSelected = selectedKpId === kp.id;
+          if (editingKpId === kp.id) {
+            return (
+              <div key={kp.id} className="border-b last:border-b-0 border-l-4 border-l-amber-400 bg-amber-50/50 px-3 py-2 space-y-2">
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full border rounded px-2 py-1 text-xs"
+                  autoFocus
+                />
+                <select
+                  value={editChapterId ?? ""}
+                  onChange={(e) => setEditChapterId(Number(e.target.value))}
+                  className="w-full border rounded px-2 py-1 text-xs text-gray-600"
+                >
+                  {chapters.map((c) => (
+                    <option key={c.id} value={c.id}>{c.title}</option>
+                  ))}
+                </select>
+                <div className="flex gap-1">
+                  <button
+                    onClick={handleSaveEdit}
+                    disabled={savingEdit || !editName.trim()}
+                    className="flex-1 px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600 disabled:bg-gray-300"
+                  >
+                    {savingEdit ? "保存中..." : "保存"}
+                  </button>
+                  <button
+                    onClick={() => setEditingKpId(null)}
+                    className="flex-1 px-2 py-1 text-gray-500 text-xs border rounded hover:bg-gray-50"
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            );
+          }
           return (
             <div
               key={kp.id}
-              className={`flex items-center border-b last:border-b-0 transition-colors ${
+              className={`group flex items-center border-b last:border-b-0 transition-colors ${
                 isSelected
                   ? "bg-blue-50 border-l-4 border-l-blue-500"
                   : "border-l-4 border-l-transparent"
@@ -253,6 +335,18 @@ export function KnowledgePointList({
                 }`}
               >
                 {kp.name}
+                {kp._count && (
+                  <span className="ml-1.5 text-[10px] text-gray-400 bg-gray-100 rounded-full px-1.5 py-0.5">
+                    {kp._count.problems}题
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); startEdit(kp); }}
+                className="px-1.5 py-1 text-gray-300 hover:text-blue-500 hover:bg-blue-50 rounded text-xs transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
+                title="改名 / 移动到其他章节"
+              >
+                ✏️
               </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleDelete(kp.id); }}

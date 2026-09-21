@@ -8,6 +8,9 @@ import type { DocContent, DocParagraph, ParagraphRun } from "@/lib/docx-parser";
 import { docParagraphsToTipTapJson } from "@/lib/tip-tap-converter";
 import { GlobalToolbar } from "@/components/tiptap/global-toolbar";
 
+import { VoiceInputButton, insertVoiceTextIntoEditor } from "@/components/voice-input-button";
+import { MathFormulaModal } from "@/components/math-formula-modal";
+
 const RichTextEditor = dynamic(
   () => import("@/components/tiptap/rich-text-editor").then((mod) => mod.RichTextEditor),
   { ssr: false },
@@ -64,6 +67,7 @@ interface Problem {
   questionType: string;
   difficulty: number;
   sourceDate: string;
+  answer: string; // TipTap JSON 字符串
 }
 
 function renderFormula(latex: string): string {
@@ -109,6 +113,7 @@ const QUESTION_TYPES = ["单选", "多选", "实验", "计算"];
 export default function UploadPage() {
   const [parsedDoc, setParsedDoc] = useState<DocContent | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState("正在解析试卷...");
   const [error, setError] = useState<string | null>(null);
   const [problems, setProblems] = useState<Problem[]>([]);
   const [splitIndices, setSplitIndices] = useState<Set<number>>(new Set());
@@ -121,11 +126,75 @@ export default function UploadPage() {
 
   // Global toolbar state
   const [activeEditor, setActiveEditor] = useState<Editor | null>(null);
+  const answerEditors = useRef<Record<number, import("@tiptap/react").Editor | null>>({});
+  const [mathTarget, setMathTarget] = useState<import("@tiptap/react").Editor | null>(null);
+  const [ocrSec, setOcrSec] = useState<number | null>(null);
   const [editorActive, setEditorActive] = useState<Record<string, boolean>>({});
   const [showPreview, setShowPreview] = useState(true);
+  const [errorDialog, setErrorDialog] = useState<{ message: string; detail?: string } | null>(null);
+  const lastFileRef = useRef<File | null>(null);
 
   useEffect(() => {
-    fetch("/api/textbooks")
+    // 直接 Ctrl+V 粘贴截图：剪贴板里的图片直接进入识别流程
+    const onPaste = (e: ClipboardEvent) => {
+      if (loading) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith("image/")) {
+          const file = item.getAsFile();
+          if (!file) return;
+          e.preventDefault();
+          const ext = (item.type.split("/")[1] || "png").replace("jpeg", "jpg");
+          const now = new Date();
+          const pad = (n: number) => String(n).padStart(2, "0");
+          const name = `截图_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}.${ext}`;
+          handleFileRef.current(new File([file], name, { type: item.type }));
+          return;
+        }
+      }
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [loading]);
+
+  useEffect(() => {
+    // 「拍照转Word」页的分割入库入口：sessionStorage 交接识别结果
+    try {
+      const snap = sessionStorage.getItem("snapshot_doc");
+      if (snap) {
+        sessionStorage.removeItem("snapshot_doc");
+        setParsedDoc(JSON.parse(snap));
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    // 试卷库「拆题入库」入口：?fromPaper=<id> 自动载入试卷文件
+    const params = new URLSearchParams(window.location.search);
+    const fromPaper = params.get("fromPaper");
+    if (fromPaper) {
+      fetch(`/tiku/api/papers/${fromPaper}/download`)
+        .then((r) => {
+          if (!r.ok) throw new Error("试卷不存在");
+          return r.blob();
+        })
+        .then(async (blob) => {
+          // 从 Content-Disposition 拿原文件名
+          const res = await fetch(`/tiku/api/papers/${fromPaper}/download`, { method: "HEAD" });
+          const cd = res.headers.get("Content-Disposition") || "";
+          const m = cd.match(/filename\*=UTF-8''(.+)/);
+          const name = m ? decodeURIComponent(m[1]) : "paper.docx";
+          const f = new File([blob], name, { type: blob.type });
+          handleFileRef.current(f);
+        })
+        .catch((e) => setError(e instanceof Error ? e.message : "载入试卷失败"));
+    }
+  }, []);
+
+useEffect(() => {
+    fetch("/tiku/api/textbooks")
       .then((r) => r.json())
       .then((d) => setTextbooks(d.data || []))
       .catch(() => {});
@@ -152,40 +221,107 @@ export default function UploadPage() {
     };
   }, [activeEditor]);
 
+  // 各章节已有知识点缓存：chapterId -> 知识点列表（打标签时点击快速添加）
+  const [chapterKps, setChapterKps] = useState<Record<number, { id: number; name: string }[]>>({});
+  useEffect(() => {
+    const ids = Array.from(new Set(problems.map((p) => p.chapterId).filter((x): x is number => !!x)));
+    const missing = ids.filter((id) => !(id in chapterKps));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        missing.map(async (id) => {
+          try {
+            const res = await fetch(`/tiku/api/knowledge-points?chapterId=${id}`);
+            const d = await res.json();
+            return [id, (d.data || []).map((k: { id: number; name: string }) => ({ id: k.id, name: k.name }))] as const;
+          } catch {
+            return [id, []] as const;
+          }
+        }),
+      );
+      if (!cancelled) setChapterKps((prev) => ({ ...prev, ...Object.fromEntries(entries) }));
+    })();
+    return () => { cancelled = true; };
+  }, [problems, chapterKps]);
+
   const loadChapters = useCallback(async (textbookId: number) => {
     setChapters([]);
-    const res = await fetch(`/api/chapters?textbookId=${textbookId}`);
+    const res = await fetch(`/tiku/api/chapters?textbookId=${textbookId}`);
     const d = await res.json();
     setChapters(d.data || []);
   }, []);
 
+  const handleFileRef = useRef<(f: File) => void>(() => {});
   const handleFile = useCallback(async (file: File) => {
-    if (!file.name.endsWith(".docx")) {
-      setError("请选择 .docx 格式的文件");
+    const isDocx = file.name.toLowerCase().endsWith(".docx");
+    const isImage = /\.(png|jpe?g|webp|bmp)$/i.test(file.name);
+    if (!isDocx && !isImage) {
+      setError("请选择 .docx 文件或 .png/.jpg 图片");
       return;
     }
     setLoading(true);
+    setLoadingText(isImage ? "正在识别图片中的题目（约需十几秒）..." : "正在解析试卷...");
     setError(null);
     setSplitIndices(new Set());
     setProblems([]);
     setSavedMsg(null);
 
+    lastFileRef.current = file;
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/parse-docx", { method: "POST", body: fd });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "解析失败");
+      const endpoint = isImage ? "/tiku/api/ocr-image" : "/tiku/api/parse-docx";
+      const res = await fetch(endpoint, { method: "POST", body: fd });
+      // 响应不是 JSON（比如网关 HTML 错误页）时给出可读信息，而不是 Unexpected token
+      let data: { data?: { jobId?: string; content?: unknown }; error?: string };
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error(
+          `上传请求异常（HTTP ${res.status}）——可能是网络波动或服务重启，请稍等几秒重试`,
+        );
       }
-      const data = await res.json();
-      setParsedDoc(data.content);
+      if (!res.ok) throw new Error(data.error || `请求失败（HTTP ${res.status}）`);
+
+      if (isImage && data.data?.jobId) {
+        // 后台任务模式：轮询进度（绕开网关超时）
+        const jobId = data.data.jobId;
+        const t0 = Date.now();
+        const elapsed = () => Math.round((Date.now() - t0) / 1000);
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 2500));
+          const pr = await fetch(`/tiku/api/ocr-image?jobId=${jobId}`);
+          let pd: { data?: { status?: string; stage?: string; error?: string; content?: unknown }; error?: string };
+          try {
+            pd = await pr.json();
+          } catch {
+            throw new Error(`查询识别进度失败（HTTP ${pr.status}），请检查网络后重试`);
+          }
+          if (!pr.ok) throw new Error(pd.error || `查询进度失败（HTTP ${pr.status}）`);
+          const job = pd.data!;
+          if (job.status === "done") {
+            setParsedDoc(job.content as DocContent | null);
+            setOcrSec(elapsed());
+            break;
+          }
+          if (job.status === "error") {
+            throw new Error(job.error || "识别失败");
+          }
+          if (job.stage) setLoadingText(`正在识别图片中的题目：${job.stage}…（已用时 ${elapsed()} 秒）`);
+        }
+      } else {
+        setParsedDoc(((data.data?.content ?? (data as unknown as { content?: DocContent }).content) ?? null) as DocContent | null);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "解析失败");
+      const msg = e instanceof Error ? e.message : "解析失败";
+      setError(msg);
+      setErrorDialog({ message: isImage ? "图片识别失败" : "试卷解析失败", detail: msg });
     } finally {
       setLoading(false);
     }
   }, []);
+  handleFileRef.current = handleFile;
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -227,6 +363,7 @@ export default function UploadPage() {
       questionType: "",
       difficulty: 3,
       sourceDate: todayStr(),
+      answer: "",
     });
     parsedDoc.paragraphs.forEach((para, i) => {
       current.push(para);
@@ -310,7 +447,7 @@ export default function UploadPage() {
 
     try {
       // 一次批量查重（按归一化内容哈希，服务端比对）
-      const checkRes = await fetch("/api/problems/check-duplicate", {
+      const checkRes = await fetch("/tiku/api/problems/check-duplicate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contents: keptProblems.map((p) => p.content) }),
@@ -370,7 +507,7 @@ export default function UploadPage() {
           const kpIds: number[] = [];
           for (const tag of p.tags) {
             const searchRes = await fetch(
-              `/api/knowledge-points?search=${encodeURIComponent(tag.name)}`,
+              `/tiku/api/knowledge-points?search=${encodeURIComponent(tag.name)}`,
             );
             const searchData = await searchRes.json();
             const found = searchData.data?.find(
@@ -379,7 +516,7 @@ export default function UploadPage() {
             if (found) {
               kpIds.push(found.id);
             } else {
-              const createRes = await fetch("/api/knowledge-points", {
+              const createRes = await fetch("/tiku/api/knowledge-points", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ chapterId: p.chapterId, name: tag.name }),
@@ -389,11 +526,12 @@ export default function UploadPage() {
             }
           }
 
-          await fetch(`/api/problems/${existing.id}`, {
+          await fetch(`/tiku/api/problems/${existing.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               content: p.content,
+              answer: p.answer || null,
               difficulty: p.difficulty,
               lessonTitle: p.lessonTitle || null,
               questionType: p.questionType || null,
@@ -407,7 +545,7 @@ export default function UploadPage() {
           const kpIds: number[] = [];
           for (const tag of p.tags) {
             const searchRes = await fetch(
-              `/api/knowledge-points?search=${encodeURIComponent(tag.name)}`,
+              `/tiku/api/knowledge-points?search=${encodeURIComponent(tag.name)}`,
             );
             const searchData = await searchRes.json();
             const found = searchData.data?.find(
@@ -416,7 +554,7 @@ export default function UploadPage() {
             if (found) {
               kpIds.push(found.id);
             } else {
-              const createRes = await fetch("/api/knowledge-points", {
+              const createRes = await fetch("/tiku/api/knowledge-points", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ chapterId: p.chapterId, name: tag.name }),
@@ -426,7 +564,7 @@ export default function UploadPage() {
             }
           }
 
-          await fetch("/api/problems", {
+          await fetch("/tiku/api/problems", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify([{
@@ -476,17 +614,18 @@ export default function UploadPage() {
                 loading ? "border-blue-300 bg-blue-50" : "border-gray-300 hover:border-blue-400 hover:bg-blue-50"
               }`}
             >
-              <input ref={fileInputRef} type="file" accept=".docx" onChange={handleInputChange} className="hidden" />
+              <input ref={fileInputRef} type="file" accept=".docx,.png,.jpg,.jpeg,.webp,.bmp" onChange={handleInputChange} className="hidden" />
               {loading ? (
                 <div className="text-gray-500">
                   <div className="animate-spin inline-block w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mb-2" />
-                  <p>正在解析试卷...</p>
+                  <p>{loadingText}</p>
                 </div>
               ) : (
                 <div>
                   <div className="text-4xl mb-3">📄</div>
-                  <p className="text-lg text-gray-600">拖拽 .docx 文件到此处，或点击选择</p>
-                  <p className="text-sm text-gray-400 mt-2">支持 WPS / Microsoft Word 文档</p>
+                  <p className="text-lg text-gray-600">拖拽 .docx 试卷或题目图片到此处，或点击选择</p>
+                  <p className="text-sm text-blue-500 mt-1">💡 截图后可直接按 Ctrl + V 粘贴上传</p>
+                  <p className="text-sm text-gray-400 mt-2">支持 WPS / Microsoft Word 文档 · 支持拍照/截图，自动识别文字、希腊字母与公式</p>
                 </div>
               )}
             </div>
@@ -503,9 +642,29 @@ export default function UploadPage() {
               <h2 className="text-lg font-semibold text-gray-700">
                 试卷预览 — 共 {parsedDoc.paragraphs.length} 段
               </h2>
-              <button onClick={applySplits} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm">
-                确认分割 → 标注标签
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setParsedDoc(null);
+                    setSplitIndices(new Set());
+                    setError(null);
+                    setSavedMsg(null);
+                    // 清掉 ?fromPaper 参数，避免刷新后再次自动载入
+                    if (new URLSearchParams(window.location.search).get("fromPaper")) {
+                      window.history.replaceState({}, "", "/tiku/upload");
+                    }
+                  }}
+                  className="px-4 py-2 bg-white border text-gray-600 rounded-lg hover:bg-gray-50 text-sm"
+                >
+                  取消
+                </button>
+                <button onClick={applySplits} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm">
+                  确认分割 → 标注标签
+                </button>
+                {ocrSec !== null && (
+                  <span className="text-xs text-gray-400 self-center">本次识别用时 {ocrSec} 秒</span>
+                )}
+              </div>
             </div>
             <p className="text-sm text-gray-500 mb-4">
               点击段落之间的 <span className="px-2 py-0.5 bg-yellow-200 rounded text-xs font-bold">分割线</span> 按钮来切分题目
@@ -530,11 +689,25 @@ export default function UploadPage() {
                     </div>
                   )}
                   <div className={`px-5 py-3 ${para.style?.startsWith("Heading") ? "bg-blue-50 font-bold text-xl" : ""}`}>
-                    <p className="leading-relaxed text-base">
-                      {para.runs.map((run, j) => (
-                        <RenderRun key={j} run={run} />
-                      ))}
-                    </p>
+                    {para.tableCells ? (
+                      <table className="border-collapse w-full text-sm">
+                        <tbody>
+                          <tr>
+                            {para.tableCells.map((cell, ci) => (
+                              <td key={ci} className="border border-gray-300 px-2 py-1">
+                                {cell.map((run, j) => <RenderRun key={j} run={run} />)}
+                              </td>
+                            ))}
+                          </tr>
+                        </tbody>
+                      </table>
+                    ) : (
+                      <p className="leading-relaxed text-base">
+                        {para.runs.map((run, j) => (
+                          <RenderRun key={j} run={run} />
+                        ))}
+                      </p>
+                    )}
                   </div>
                 </div>
               ))}
@@ -594,6 +767,54 @@ export default function UploadPage() {
                       }
                     />
 
+                    {/* 答案区（可语音输入） */}
+                    <div className="border-t border-dashed border-gray-200 bg-amber-50/40">
+                      <div className="px-4 pt-2 pb-1 flex items-center gap-2">
+                        <span className="text-xs text-amber-700 font-medium">答案</span>
+                        <VoiceInputButton
+                          onResult={(text) => {
+                            const ed = answerEditors.current[problem.id];
+                            if (ed) insertVoiceTextIntoEditor(ed, text);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setMathTarget(answerEditors.current[problem.id] || null)}
+                          className="px-2.5 py-1 border rounded text-xs text-gray-600 hover:bg-gray-50"
+                        >
+                          ∑ 公式
+                        </button>
+                        <label className="px-2.5 py-1 border rounded text-xs text-gray-600 hover:bg-gray-50 cursor-pointer">
+                          🖼 图片
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const f = e.target.files?.[0];
+                              e.target.value = "";
+                              if (!f) return;
+                              const ed = answerEditors.current[problem.id];
+                              if (!ed) return;
+                              const reader = new FileReader();
+                              reader.onloadend = () => ed.chain().focus().setImage({ src: reader.result as string }).run();
+                              reader.readAsDataURL(f);
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <RichTextEditor
+                        content={problem.answer || ""}
+                        editable={true}
+                        plain
+                        onFocus={(editor) => setActiveEditor(editor)}
+                        onEditorReady={(editor) => { answerEditors.current[problem.id] = editor; }}
+                        onChange={(_html, json) =>
+                          updateProblem(problem.id, "answer", JSON.stringify(json))
+                        }
+                      />
+                    </div>
+
                     {/* Divider */}
                     <div className="border-t border-gray-200" />
 
@@ -619,6 +840,27 @@ export default function UploadPage() {
                           ))}
                         </div>
                         <TagInput onAdd={(name) => addTag(problem.id, name)} />
+                        {(() => {
+                          const kps = problem.chapterId ? chapterKps[problem.chapterId] || [] : [];
+                          const notAdded = kps.filter((kp) => !problem.tags.some((t) => t.name === kp.name));
+                          if (notAdded.length === 0) return null;
+                          return (
+                            <div className="mt-1.5">
+                              <div className="text-[10px] text-gray-400 mb-1">本章知识点（点击添加）：</div>
+                              <div className="flex flex-wrap gap-1">
+                                {notAdded.map((kp) => (
+                                  <button
+                                    key={kp.id}
+                                    onClick={() => addTag(problem.id, kp.name)}
+                                    className="px-2 py-0.5 bg-white border border-blue-200 text-blue-600 rounded text-xs hover:bg-blue-50 hover:border-blue-400 transition-colors"
+                                  >
+                                    ＋ {kp.name}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* Textbook + Chapter */}
@@ -696,15 +938,35 @@ export default function UploadPage() {
 
                 {/* Save button */}
                 {keptProblems.length > 0 && (
-                  <button
-                    onClick={saveToDatabase}
-                    disabled={saving}
-                    className={`w-full py-2.5 rounded-lg text-white font-medium text-sm transition-colors ${
-                      saving ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
-                    }`}
-                  >
-                    {saving ? "正在保存..." : `保存全部 ${keptProblems.length} 题到数据库`}
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setProblems([]);
+                        setParsedDoc(null);
+                        setSplitIndices(new Set());
+                        setError(null);
+                        setSavedMsg(null);
+                        setShowPreview(false);
+                        // 清掉 ?fromPaper 参数，避免刷新后再次自动载入
+                        if (new URLSearchParams(window.location.search).get("fromPaper")) {
+                          window.history.replaceState({}, "", "/tiku/upload");
+                        }
+                      }}
+                      disabled={saving}
+                      className="w-28 py-2.5 rounded-lg border text-gray-600 font-medium text-sm hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={saveToDatabase}
+                      disabled={saving}
+                      className={`flex-1 py-2.5 rounded-lg text-white font-medium text-sm transition-colors ${
+                        saving ? "bg-gray-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"
+                      }`}
+                    >
+                      {saving ? "正在保存..." : `保存全部 ${keptProblems.length} 题到数据库`}
+                    </button>
+                  </div>
                 )}
 
                 {error && (
@@ -752,9 +1014,17 @@ export default function UploadPage() {
                       </div>
                       {problem.paragraphs.map((para, i) => (
                         <div key={i} className={`px-3 py-0.5 text-sm ${para.style?.startsWith("Heading") ? "bg-blue-50 font-bold" : ""}`}>
-                          {para.runs.map((run, j) => (
-                            <RenderRun key={j} run={run} />
-                          ))}
+                          {para.tableCells ? (
+                            para.tableCells.map((cell, ci) => (
+                              <span key={"c" + ci} className="inline-block border border-gray-300 rounded px-1.5 py-0.5 mr-1 bg-gray-50 align-middle">
+                                {cell.map((run, j) => <RenderRun key={j} run={run} />)}
+                              </span>
+                            ))
+                          ) : (
+                            para.runs.map((run, j) => (
+                              <RenderRun key={j} run={run} />
+                            ))
+                          )}
                         </div>
                       ))}
                     </div>
@@ -784,6 +1054,51 @@ export default function UploadPage() {
           </button>
         )}
       </main>
+
+      {/* 错误弹窗：具体原因 + 一键重试 */}
+      {errorDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]" onClick={() => setErrorDialog(null)}>
+          <div className="bg-white rounded-xl p-6 w-[460px] max-w-[92vw] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <span className="text-3xl">⚠️</span>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-gray-800">{errorDialog.message}</h3>
+                <p className="text-sm text-red-600 mt-2 leading-relaxed break-all">{errorDialog.detail}</p>
+                <p className="text-xs text-gray-400 mt-2">
+                  提示：网络波动或服务升级瞬间可能出现此错误，通常点击重试即可恢复。
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-5">
+              <button onClick={() => setErrorDialog(null)} className="px-4 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
+                关闭
+              </button>
+              {lastFileRef.current && (
+                <button
+                  onClick={() => {
+                    const f = lastFileRef.current;
+                    setErrorDialog(null);
+                    if (f) handleFileRef.current(f);
+                  }}
+                  className="px-5 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600"
+                >
+                  重试
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 可视化公式编辑器（答案区） */}
+      <MathFormulaModal
+        open={mathTarget !== null}
+        onCancel={() => setMathTarget(null)}
+        onConfirm={(latex) => {
+          mathTarget?.chain().focus().setInlineMath(latex).run();
+          setMathTarget(null);
+        }}
+      />
     </div>
   );
 }
@@ -823,6 +1138,7 @@ function TagInput({ onAdd, disabled }: { onAdd: (name: string) => void; disabled
       >
         添加
       </button>
+
     </div>
   );
 }

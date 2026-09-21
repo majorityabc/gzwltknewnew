@@ -34,14 +34,7 @@ export default function RootLayout({
             <Link href="/" className="text-lg font-bold text-gray-800 hover:text-blue-600 transition-colors">
               高中物理题库
             </Link>
-            <div className="flex items-center gap-6 text-sm">
-              <Link href="/" className="text-gray-600 hover:text-blue-600 transition-colors">
-                题库管理
-              </Link>
-              <Link href="/upload" className="text-gray-600 hover:text-blue-600 transition-colors">
-                上传试卷
-              </Link>
-            </div>
+<div className="flex-1" />
           </div>
         </nav>
         <div className="flex-1">{children}</div>

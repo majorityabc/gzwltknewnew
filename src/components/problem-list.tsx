@@ -24,6 +24,7 @@ export interface ProblemItem {
   questionType: string | null;
   sourceDate: string | null;
   remarks: string | null;
+  answer?: string | null;
   createdAt: string;
   knowledgePoints: ProblemKnowledgePoint[];
 }

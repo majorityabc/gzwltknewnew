@@ -1,8 +1,17 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import katex from "katex";
 import type { DocContent, DocParagraph, ParagraphRun } from "@/lib/docx-parser";
+import FigureReview from "@/components/figure-review";
+import dynamic from "next/dynamic";
+import { VoiceInputButton, insertVoiceTextIntoEditor } from "@/components/voice-input-button";
+import { MathFormulaModal } from "@/components/math-formula-modal";
+
+const RichTextEditor = dynamic(
+  () => import("@/components/tiptap/rich-text-editor").then((m) => m.RichTextEditor),
+  { ssr: false },
+);
 import { docParagraphsToTipTapJson } from "@/lib/tip-tap-converter";
 
 interface ProblemTag {
@@ -27,6 +36,7 @@ interface ModalProblem {
   questionType: string;
   sourceDate: string;
   kept: boolean;
+  answer: string;
 }
 
 interface UploadModalProps {
@@ -78,7 +88,19 @@ function RenderRun({ run }: { run: ParagraphRun }) {
 
 const QUESTION_TYPES = ["单选", "多选", "实验", "计算"];
 
+interface BatchItem {
+  id: number;
+  file: File;
+  url: string;
+  status: "processing" | "done" | "error";
+  text: string;
+  progress: number;
+  content?: DocContent;
+}
+
 export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle, kpId, kpName, onSaved }: UploadModalProps) {
+  const answerEditors = useRef<Record<number, import("@tiptap/react").Editor | null>>({});
+  const [mathTarget, setMathTarget] = useState<import("@tiptap/react").Editor | null>(null);
   const [parsedDoc, setParsedDoc] = useState<DocContent | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +108,10 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
   const [problems, setProblems] = useState<ModalProblem[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedCount, setSavedCount] = useState<number | null>(null);
+  const [loadingText, setLoadingText] = useState("正在解析试卷...");
+  const [batch, setBatch] = useState<BatchItem[]>([]);
+  const batchIdRef = useRef(0);
+  const handleFileRef = useRef<(fs: File[]) => void>(() => {});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reset = useCallback(() => {
@@ -96,57 +122,178 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
     setProblems([]);
     setSaving(false);
     setSavedCount(null);
+    setBatch((prev) => {
+      prev.forEach((b) => URL.revokeObjectURL(b.url));
+      return [];
+    });
   }, []);
 
   const handleClose = useCallback(() => {
+    // 有识别/编辑内容时二次确认，防误关丢失
+    const hasWork =
+      parsedDoc !== null ||
+      batch.length > 0 ||
+      problems.length > 0;
+    if (hasWork && !saving && savedCount === null) {
+      if (!window.confirm("当前有未保存的题目内容，关闭后将丢失。确定关闭吗？")) return;
+    }
     reset();
     onClose();
-  }, [onClose, reset]);
+  }, [onClose, reset, parsedDoc, batch.length, problems.length, saving, savedCount]);
 
   // ── Upload & Parse ──
 
-  const handleFile = useCallback(async (file: File) => {
-    if (!file.name.endsWith(".docx")) {
-      setError("请选择 .docx 格式的文件");
+  // 批量识别一张题图（每张=一题）
+  const recognizeBatchImage = useCallback(async (item: BatchItem) => {
+    const update = (patch: Partial<BatchItem>) =>
+      setBatch((prev) => prev.map((b) => (b.id === item.id ? { ...b, ...patch } : b)));
+    update({ status: "processing", text: "上传中...", progress: 0 });
+    const t0 = Date.now();
+    const elapsed = () => Math.round((Date.now() - t0) / 1000);
+    try {
+      const fd = new FormData();
+      fd.append("file", item.file);
+      const res = await fetch("/tiku/api/ocr-image", { method: "POST", body: fd });
+      let data: { data?: { jobId?: string }; error?: string };
+      try { data = await res.json(); } catch {
+        throw new Error(`上传请求异常（HTTP ${res.status}），请稍等几秒重试`);
+      }
+      if (!res.ok) throw new Error(data.error || "识别失败");
+      const jobId = data.data?.jobId;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 2500));
+        const pr = await fetch(`/tiku/api/ocr-image?jobId=${jobId}`);
+        let pd: { data?: { status?: string; stage?: string; progress?: number; error?: string; content?: unknown }; error?: string };
+        try { pd = await pr.json(); } catch {
+          throw new Error(`查询识别进度失败（HTTP ${pr.status}），请检查网络后重试`);
+        }
+        if (!pr.ok) throw new Error(pd.error || "查询进度失败");
+        const job = pd.data!;
+        if (job.status === "done") {
+          const c = job.content as DocContent;
+          for (const para of c.paragraphs || []) {
+            for (const r of para.runs || []) {
+              const anyR = r as unknown as { type?: string; fig?: { originUrl?: string } };
+              if (anyR.type === "image" && anyR.fig) anyR.fig.originUrl = item.url;
+            }
+          }
+          update({ status: "done", text: `识别完成 · 用时 ${elapsed()} 秒（${c.paragraphs?.length || 0} 段）`, progress: 100, content: c });
+          break;
+        }
+        if (job.status === "error") throw new Error(job.error || "识别失败");
+        update({ text: `${job.stage || "识别中..."} · ${elapsed()}s`, progress: job.progress ?? 0 });
+      }
+    } catch (e) {
+      update({ status: "error", text: e instanceof Error ? e.message : "识别失败" });
+    }
+  }, []);
+
+  // 批量入口
+  const handleFiles = useCallback(async (files: File[]) => {
+    if (!files.length) return;
+    const docx = files.find((f) => f.name.toLowerCase().endsWith(".docx"));
+    const imgs = files.filter((f) => /\.(png|jpe?g|webp|bmp)$/i.test(f.name));
+    if (docx) {
+      setError(null);
+      setLoading(true);
+      setLoadingText("正在解析试卷...");
+      setSplitIndices(new Set());
+      setProblems([]);
+      setSavedCount(null);
+      setBatch((prev) => { prev.forEach((b) => URL.revokeObjectURL(b.url)); return []; });
+      try {
+        const fd = new FormData();
+        fd.append("file", docx);
+        const res = await fetch("/tiku/api/parse-docx", { method: "POST", body: fd });
+        if (!res.ok) {
+          const d = await res.json();
+          throw new Error(d.error || "解析失败");
+        }
+        const d = await res.json();
+        setParsedDoc(d.content);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "解析失败");
+      } finally {
+        setLoading(false);
+      }
       return;
     }
-    setLoading(true);
+    if (!imgs.length) {
+      setError("请选择 .docx 试卷或 .png/.jpg 题目图片");
+      return;
+    }
     setError(null);
     setSplitIndices(new Set());
     setProblems([]);
     setSavedCount(null);
+    const items: BatchItem[] = imgs.slice(0, 20).map((f) => ({
+      id: ++batchIdRef.current,
+      file: f,
+      url: URL.createObjectURL(f),
+      status: "processing",
+      text: "排队中...",
+      progress: 0,
+    }));
+    setBatch((prev) => [...prev, ...items].slice(0, 20));
+    items.forEach((it) => { void recognizeBatchImage(it); });
+  }, [recognizeBatchImage]);
+  handleFileRef.current = handleFiles;
 
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/parse-docx", { method: "POST", body: fd });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "解析失败");
+  // 批量合并 → 分割预览（相邻两图之间自动打分割点 = 每图一题）
+  const mergeBatch = useCallback(() => {
+    const done = batch.filter((b) => b.status === "done" && b.content);
+    if (!done.length) return;
+    const paragraphs: DocParagraph[] = [];
+    const splits = new Set<number>();
+    done.forEach((it, i) => {
+      if (i > 0) splits.add(paragraphs.length - 1);
+      paragraphs.push(...(it.content!.paragraphs || []));
+    });
+    setSplitIndices(splits);
+    setParsedDoc({ paragraphs });
+  }, [batch]);
+
+  // 不自动进分割页：等用户点「开始分割」，避免第一张识别完就锁定、后续粘贴被拒收
+
+  // Ctrl+V 直接粘贴截图（弹窗打开且空闲时生效；粘贴文字不受影响）
+  useEffect(() => {
+    if (!open) return;
+    const onPaste = (e: ClipboardEvent) => {
+      if (loading || parsedDoc) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (!f) return;
+          e.preventDefault();
+          const ext = (it.type.split("/")[1] || "png").replace("jpeg", "jpg");
+          const now = new Date();
+          const pad = (n: number) => String(n).padStart(2, "0");
+          const name = `截图_${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}.${ext}`;
+          handleFileRef.current([new File([f], name, { type: it.type })]);
+          return;
+        }
       }
-      const data = await res.json();
-      setParsedDoc(data.content);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "解析失败");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [open, loading, parsedDoc]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
-  }, [handleFile]);
+    handleFiles(Array.from(e.dataTransfer.files || []));
+  }, [handleFiles]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
   }, []);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFile(file);
-  }, [handleFile]);
+    handleFiles(Array.from(e.target.files || []));
+    e.target.value = "";
+  }, [handleFiles]);
 
   // ── Split ──
 
@@ -174,6 +321,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
           questionType: "",
           sourceDate: todayStr(),
           kept: true,
+          answer: "",
         });
         current = [];
       }
@@ -187,6 +335,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
         questionType: "",
         sourceDate: todayStr(),
         kept: true,
+        answer: "",
       });
     }
     setProblems(result);
@@ -255,7 +404,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
       );
 
       // 一次批量查重（按归一化内容哈希，服务端比对）
-      const checkRes = await fetch("/api/problems/check-duplicate", {
+      const checkRes = await fetch("/tiku/api/problems/check-duplicate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contents }),
@@ -282,7 +431,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
             if (!kpIds.includes(kpId)) kpIds.push(kpId);
             continue;
           }
-          const searchRes = await fetch(`/api/knowledge-points?search=${encodeURIComponent(tag.name)}`);
+          const searchRes = await fetch(`/tiku/api/knowledge-points?search=${encodeURIComponent(tag.name)}`);
           const searchData = await searchRes.json();
           const found = searchData.data?.find(
             (kp: { id: number; name: string }) => kp.name === tag.name,
@@ -290,7 +439,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
           if (found) {
             if (!kpIds.includes(found.id)) kpIds.push(found.id);
           } else {
-            const createRes = await fetch("/api/knowledge-points", {
+            const createRes = await fetch("/tiku/api/knowledge-points", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ chapterId, name: tag.name }),
@@ -319,7 +468,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
             continue;
           }
 
-          await fetch(`/api/problems/${existing.id}`, {
+          await fetch(`/tiku/api/problems/${existing.id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -332,11 +481,12 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
           });
           updated++;
         } else {
-          await fetch("/api/problems", {
+          await fetch("/tiku/api/problems", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify([{
               content: contentStr,
+              answer: p.answer || null,
               difficulty: p.difficulty,
               questionType: p.questionType || null,
               sourceDate: p.sourceDate || null,
@@ -361,7 +511,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
   const keptCount = problems.filter((p) => p.kept).length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={handleClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div
         className="bg-white rounded-xl shadow-2xl w-[95vw] h-[90vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
@@ -393,23 +543,75 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
               onClick={() => fileInputRef.current?.click()}
               className="border-2 border-dashed rounded-xl p-16 text-center cursor-pointer transition-colors border-gray-300 hover:border-blue-400 hover:bg-blue-50"
             >
-              <input ref={fileInputRef} type="file" accept=".docx" onChange={handleInputChange} className="hidden" />
+              <input ref={fileInputRef} type="file" accept=".docx,.png,.jpg,.jpeg,.webp,.bmp" multiple onChange={handleInputChange} className="hidden" />
               <div className="text-4xl mb-3">📄</div>
-              <p className="text-lg text-gray-600">拖拽 .docx 文件到此处，或点击选择</p>
+              <p className="text-lg text-gray-600">拖拽 .docx 试卷或题目图片到此处，或点击选择（图片可多选）</p>
+              <p className="text-sm text-blue-500 mt-1">💡 截图后可连续按 Ctrl + V 粘贴多题，每张图=一道题</p>
               <p className="text-sm text-gray-400 mt-2">题目将自动归类到「{kpName}」</p>
+            </div>
+          )}
+
+          {/* 批量题图队列 */}
+          {batch.length > 0 && !parsedDoc && (
+            <div className="mt-4 space-y-2">
+              {batch.map((b) => (
+                <div key={b.id} className="border rounded-lg px-3 py-2 flex items-center gap-3 text-sm bg-white">
+                  <span className="text-lg">{b.status === "done" ? "✅" : b.status === "error" ? "❌" : "⏳"}</span>
+                  <span className="flex-1 truncate text-gray-700">{b.file.name}</span>
+                  {b.status === "processing" && (
+                    <div className="w-32 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-500 rounded-full transition-all duration-500" style={{ width: `${Math.max(3, b.progress)}%` }} />
+                    </div>
+                  )}
+                  <span className={`text-xs ${b.status === "error" ? "text-red-500" : "text-gray-400"}`}>
+                    {b.status === "processing" ? `${b.text} · ${b.progress}%` : b.text}
+                  </span>
+                  {b.status === "error" && (
+                    <button onClick={() => void recognizeBatchImage(b)} className="text-xs text-blue-500 hover:underline">重试</button>
+                  )}
+                  <button
+                    onClick={() => { URL.revokeObjectURL(b.url); setBatch((prev) => prev.filter((x) => x.id !== b.id)); }}
+                    className="text-xs text-gray-300 hover:text-red-500"
+                    title="移除"
+                  >✕</button>
+                </div>
+              ))}
+              {(() => {
+                const doneN = batch.filter((b) => b.status === "done").length;
+                const busyN = batch.filter((b) => b.status === "processing").length;
+                const errN = batch.length - doneN - busyN;
+                if (busyN > 0) {
+                  return <p className="text-xs text-gray-400 pt-1">识别中… 已完成 {doneN}/{batch.length}（识别期间可继续粘贴下一题）</p>;
+                }
+                if (doneN > 0) {
+                  return (
+                    <div className="flex items-center gap-3 pt-1">
+                      <button onClick={mergeBatch} className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm font-medium">
+                        开始分割（{doneN} 张图 → 每图一题{errN > 0 ? `，跳过失败 ${errN} 张` : ""}）
+                      </button>
+                      <button onClick={reset} className="px-3 py-2 border rounded-lg text-sm text-gray-500 hover:bg-gray-50">清空重来</button>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
           )}
 
           {loading && (
             <div className="text-center py-16">
               <div className="animate-spin inline-block w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full mb-3" />
-              <p className="text-gray-500">正在解析试卷...</p>
+              <p className="text-gray-500">{loadingText}</p>
             </div>
           )}
 
           {/* Stage 2: Split */}
           {parsedDoc && problems.length === 0 && (
             <div>
+              <FigureReview
+                paragraphs={parsedDoc.paragraphs}
+                onChange={(np) => setParsedDoc({ ...parsedDoc, paragraphs: np })}
+              />
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-base font-semibold text-gray-700">
                   试卷预览 — 共 {parsedDoc.paragraphs.length} 段
@@ -483,6 +685,53 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
                       </p>
                     ))}
                   </div>
+
+                  {/* 答案（语音/公式/图片，识别完即可填写） */}
+                  {problem.kept && (
+                    <div className="border-t border-dashed border-amber-200 bg-amber-50/40">
+                      <div className="px-4 pt-2 pb-1 flex items-center gap-2">
+                        <span className="text-xs text-amber-700 font-medium">答案</span>
+                        <VoiceInputButton
+                          onResult={(text) => {
+                            const ed = answerEditors.current[problem.id];
+                            if (ed) insertVoiceTextIntoEditor(ed, text);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setMathTarget(answerEditors.current[problem.id] || null)}
+                          className="px-2.5 py-1 border rounded text-xs text-gray-600 hover:bg-gray-50"
+                        >
+                          ∑ 公式
+                        </button>
+                        <label className="px-2.5 py-1 border rounded text-xs text-gray-600 hover:bg-gray-50 cursor-pointer">
+                          🖼 图片
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const f = e.target.files?.[0];
+                              e.target.value = "";
+                              if (!f) return;
+                              const ed = answerEditors.current[problem.id];
+                              if (!ed) return;
+                              const reader = new FileReader();
+                              reader.onloadend = () => ed.chain().focus().setImage({ src: reader.result as string }).run();
+                              reader.readAsDataURL(f);
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <RichTextEditor
+                        content={problem.answer || ""}
+                        editable={true}
+                        plain
+                        onEditorReady={(editor) => { answerEditors.current[problem.id] = editor; }}
+                        onChange={(_html, json) => updateProblem(problem.id, "answer", JSON.stringify(json))}
+                      />
+                    </div>
+                  )}
 
                   {/* Classification */}
                   <div className="border-t border-gray-200 px-4 py-3 bg-gray-50/80 space-y-2 text-sm">
@@ -586,6 +835,15 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
           )}
         </div>
       </div>
+
+      <MathFormulaModal
+        open={mathTarget !== null}
+        onCancel={() => setMathTarget(null)}
+        onConfirm={(latex) => {
+          mathTarget?.chain().focus().setInlineMath(latex).run();
+          setMathTarget(null);
+        }}
+      />
     </div>
   );
 }

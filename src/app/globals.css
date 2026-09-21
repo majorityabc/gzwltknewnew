@@ -100,3 +100,35 @@ img.formula-placeholder:hover {
   background: #fde68a;
   border-color: #b45309;
 }
+
+
+/* ===== TipTap 表格（题目内容中的表格） ===== */
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 10px 0;
+  overflow: hidden;
+}
+.ProseMirror th,
+.ProseMirror td {
+  border: 1px solid #cbd5e1;
+  padding: 5px 10px;
+  vertical-align: top;
+  position: relative;
+  min-width: 2em;
+}
+.ProseMirror th {
+  background: #f1f5f9;
+  font-weight: 600;
+}
+.ProseMirror td > p,
+.ProseMirror th > p {
+  margin: 0;
+}
+
+/* ===== 编辑器内容图片：不超出容器（修复"图片显示不全"） ===== */
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+}
