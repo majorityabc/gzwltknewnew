@@ -446,6 +446,12 @@ export default function HomePage() {
           >
             📄 试卷
           </button>
+          <Link
+            href="/lectures"
+            className="px-5 py-2 text-sm font-medium transition-colors text-gray-600 hover:bg-gray-50"
+          >
+            📝 讲义
+          </Link>
         </div>
         {view === "problems" && (
           <div className="flex items-center gap-2 ml-auto">
