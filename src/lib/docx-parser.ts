@@ -18,8 +18,13 @@ import * as fs from "node:fs";
 
 const execFileAsync = promisify(execFile);
 
-/** OLE 公式预览图（wmf/emf）→ PNG data URL，按 Word 预期尺寸输出（2x 高清） */
-async function convertVectorToPng(zip: AdmZip, filePath: string, wPt: number, hPt: number): Promise<string | null> {
+/** OLE 公式预览图（wmf/emf）→ {display: 显示用 PNG, ocr: 识别用高清 PNG} */
+async function convertVectorToPng(
+  zip: AdmZip,
+  filePath: string,
+  wPt: number,
+  _hPt: number,
+): Promise<{ display: string; ocr: string } | null> {
   const entry = zip.getEntry(filePath);
   if (!entry) return null;
   const base = path.join(os.tmpdir(), `ole_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
@@ -27,20 +32,20 @@ async function convertVectorToPng(zip: AdmZip, filePath: string, wPt: number, hP
   const pngPath = `${base}.png`;
   try {
     fs.writeFileSync(srcPath, entry.getData());
-    // 预期显示宽度 px = pt × 96/72；栅格化时给 4 倍余量保证 trim 后仍清晰
-    const displayPx = wPt > 0 ? Math.round(wPt * 96 / 72) : 0;
-    const rasterW = displayPx > 0 ? Math.min(displayPx * 4, 1600) : 800;
+    const displayPx = wPt > 0 ? Math.round((wPt * 96) / 72) : 0;
+    const rasterW = 1600;
     await execFileAsync("wmf2gd", ["-t", "png", `--maxwidth=${rasterW}`, "--maxpect", "-o", pngPath, srcPath], { timeout: 15000 });
     const sharp = (await import("sharp")).default;
-    let img = sharp(pngPath).trim({ threshold: 15 });
-    if (displayPx > 0) {
-      // 缩到预期显示尺寸的 2 倍（清晰度足够且不会巨大）
-      img = img.resize({ width: displayPx * 2, withoutEnlargement: true });
-    } else {
-      img = img.resize({ width: 600, withoutEnlargement: true });
-    }
-    const buf = await img.png().toBuffer();
-    return `data:image/png;base64,${buf.toString("base64")}`;
+    const trimmed = sharp(pngPath).trim({ threshold: 15 });
+    const ocrBuf = await trimmed.clone().resize({ width: 1600, withoutEnlargement: true }).png().toBuffer();
+    const dispBuf = await trimmed
+      .resize({ width: displayPx > 0 ? displayPx * 2 : 600, withoutEnlargement: true })
+      .png()
+      .toBuffer();
+    return {
+      display: `data:image/png;base64,${dispBuf.toString("base64")}`,
+      ocr: `data:image/png;base64,${ocrBuf.toString("base64")}`,
+    };
   } catch (e) {
     console.warn("[ole] 公式预览图转换失败:", filePath, e instanceof Error ? e.message : e);
     return null;
@@ -49,25 +54,112 @@ async function convertVectorToPng(zip: AdmZip, filePath: string, wPt: number, hP
   }
 }
 
-/** 解析后处理：把所有 ole-vector:// 占位图统一转成 PNG */
+/** DeepSeek 视觉：公式图片 → LaTeX（失败返回 null，调用方回退图片） */
+async function ocrFormulaImage(dataUrl: string): Promise<string | null> {
+  const key = process.env.DEEPSEEK_API_KEY;
+  if (!key) return null;
+  const base = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
+  const model = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
+  try {
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `这是一张高中物理试卷中的公式图片。请把它精确转成 LaTeX。
+规则：只输出 LaTeX 代码本身，不要用 $ 包裹，不要任何解释；
+上下标用 ^ 和 _（如 F_1、v^2），分数 \frac{a}{b}，根号 \sqrt{x}，希腊字母 \alpha \theta \omega \pi \Delta 等；
+向量写法 \overrightarrow{AB}；特别注意：下标字符（A、B、1、2 等）极易混淆，请逐个仔细对比辨认，左右两侧的下标通常不同；看不清的字符给最合理猜测。`,
+              },
+              { type: "image_url", image_url: { url: dataUrl } },
+            ],
+          },
+        ],
+        max_tokens: 800,
+        temperature: 0,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) {
+      console.warn("[ole-ocr] deepseek error:", res.status);
+      return null;
+    }
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    let latex = (data.choices?.[0]?.message?.content || "").trim();
+    // 去掉模型可能加的 $ 包裹和代码块
+    latex = latex.replace(/^```(?:latex)?\s*/i, "").replace(/```\s*$/, "").trim();
+    latex = latex.replace(/^\$+|\$+$/g, "").trim();
+    if (!latex || latex.length > 600 || /无法|看不清|抱歉/.test(latex)) return null;
+    return latex;
+  } catch (e) {
+    console.warn("[ole-ocr] failed:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
+/** 解析后处理：ole-vector:// 占位 → 先转 PNG，再 DeepSeek 视觉识别成可编辑 LaTeX 公式（失败回退图片） */
 async function resolveOleVectorImages(paragraphs: DocParagraph[], zip: AdmZip): Promise<void> {
-  const cache = new Map<string, string | null>();
-  let total = 0, ok = 0;
+  interface OleResult { display: string; latex: string | null }
+  const cache = new Map<string, OleResult | null>();
+
+  // 1) 收集唯一占位
+  const unique: { key: string; filePath: string; wPt: number; hPt: number }[] = [];
+  const seen = new Set<string>();
   for (const para of paragraphs) {
     for (const run of para.runs || []) {
       if (run.type !== "image" || !run.src.startsWith("ole-vector://")) continue;
-      total++;
-      const rawPath = run.src.slice("ole-vector://".length);
-      const [filePath, qs] = rawPath.split("?");
-      const wPt = parseFloat(new URLSearchParams(qs || "").get("w") || "0");
-      const hPt = parseFloat(new URLSearchParams(qs || "").get("h") || "0");
-      if (!cache.has(rawPath)) cache.set(rawPath, await convertVectorToPng(zip, filePath, wPt, hPt));
-      const png = cache.get(rawPath);
-      if (png) { run.src = png; ok++; }
-      else { (run as unknown as { type: string; text: string }).type = "text"; (run as unknown as { text: string }).text = "[公式]"; }
+      const key = run.src.slice("ole-vector://".length);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const [filePath, qs] = key.split("?");
+      unique.push({
+        key,
+        filePath,
+        wPt: parseFloat(new URLSearchParams(qs || "").get("w") || "0"),
+        hPt: parseFloat(new URLSearchParams(qs || "").get("h") || "0"),
+      });
     }
   }
-  if (total > 0) console.log(`[ole] 旧版公式预览图转换：${ok}/${total} 成功`);
+  if (unique.length === 0) return;
+
+  // 2) 转换 + OCR，8 路并行
+  let ocrOk = 0;
+  for (let c = 0; c < unique.length; c += 8) {
+    await Promise.all(
+      unique.slice(c, c + 8).map(async (u) => {
+        const imgs = await convertVectorToPng(zip, u.filePath, u.wPt, u.hPt);
+        if (!imgs) { cache.set(u.key, null); return; }
+        const latex = await ocrFormulaImage(imgs.ocr);
+        if (latex) ocrOk++;
+        cache.set(u.key, { display: imgs.display, latex });
+      }),
+    );
+  }
+
+  // 3) 应用：识别成功 → 可编辑公式 run；失败 → 图片 run 回退；转换失败 → 占位文本
+  let applied = 0;
+  for (const para of paragraphs) {
+    for (let i = 0; i < (para.runs || []).length; i++) {
+      const run = para.runs[i];
+      if (run.type !== "image" || !run.src.startsWith("ole-vector://")) continue;
+      const r = cache.get(run.src.slice("ole-vector://".length));
+      if (r?.latex) {
+        para.runs[i] = { type: "formula", latex: r.latex } as unknown as typeof run;
+        applied++;
+      } else if (r) {
+        run.src = r.display;
+      } else {
+        para.runs[i] = { type: "text", text: "[公式]" } as unknown as typeof run;
+      }
+    }
+  }
+  console.log(`[ole] 公式处理：共 ${unique.length} 个唯一公式，OCR 成功 ${ocrOk}，应用公式节点 ${applied}`);
 }
 
 export interface TextRun {

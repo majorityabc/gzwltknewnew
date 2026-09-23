@@ -110,3 +110,13 @@ model Paper {
   shareToken String?   @unique // 公开分享暗号，凭此可免登录下载
   createdAt  DateTime  @default(now())
 }
+
+model Lecture {
+  id        Int      @id @default(autoincrement())
+  title     String
+  content   String   @default("") // TipTap JSON
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("lectures")
+}
