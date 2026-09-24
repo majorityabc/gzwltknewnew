@@ -59,8 +59,12 @@ wss.on("connection", async (ws, req) => {
   // 新成员加入后同步状态 + 补投离线队列
   broadcast(room, room.editors, padStatus(room));
   if (role === "editor" && room.queue.length) {
-    ws.send(JSON.stringify({ kind: "offline-notice", count: room.queue.length }));
-    for (const msg of room.queue) ws.send(JSON.stringify(msg));
+    // 只补投 30 分钟内的，过期的丢弃
+    const fresh = room.queue.filter((m) => Date.now() - (m._qAt || 0) < 30 * 60 * 1000);
+    if (fresh.length) {
+      ws.send(JSON.stringify({ kind: "offline-notice", count: fresh.length }));
+      for (const msg of fresh) { const { _qAt, ...clean } = msg; ws.send(JSON.stringify(clean)); }
+    }
     room.queue = [];
   }
 
@@ -71,7 +75,7 @@ wss.on("connection", async (ws, req) => {
       if (role !== "pad") return; // 只有 pad 能产出内容
       const out = JSON.stringify(msg);
       if (room.editors.size) broadcast(room, room.editors, out);
-      else if (room.queue.length < 50) room.queue.push(msg);
+      else if (room.queue.length < 50) room.queue.push({ ...msg, _qAt: Date.now() });
     }
   });
 
