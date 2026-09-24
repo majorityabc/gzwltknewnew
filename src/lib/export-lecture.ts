@@ -1,13 +1,30 @@
 // 服务端讲义导出：TipTap JSON → docx Buffer（供 API 路由使用，不依赖浏览器 API）
-let _mathMod: typeof import("@hungknguyen/docx-math-converter") | null = null;
-async function loadMath() {
-  if (!_mathMod) {
-    _mathMod = await import("@hungknguyen/docx-math-converter");
-    await _mathMod.mathJaxReady();
+// MathJax 在 Next 打包后必然坏（动态 require 被打包器吞掉）
+// 方案：子进程跑原生 node 做 latex→mml；mml→omml 用纯 JS 库函数
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+const execFileAsync = promisify(execFile);
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _convertMathMl2Math: ((mml: string) => any) | null = null;
+
+async function latexToMathObj(latex: string) {
+  if (!_convertMathMl2Math) {
+    const mod = await import("@hungknguyen/docx-math-converter");
+    _convertMathMl2Math = mod.convertMathMl2Math;
   }
-  return _mathMod;
+  const { stdout } = await execFileAsync("node", ["scripts/latex2mml.mjs", latex], {
+    cwd: "/root/gzwltknewnew",
+    timeout: 30000,
+  });
+  return _convertMathMl2Math(stdout);
 }
-import {
+// 必须用 CJS 入口的 docx：docx-math-converter 是 CJS require("docx")，
+// 若这里用 ESM import 会拿到另一个模块实例，导致 instanceof 检查失败、公式被静默丢弃
+import type { TextRun as TextRunT, ImageRun as ImageRunT, Paragraph as ParagraphT, Table as DocxTableT, TableRow as DocxTableRowT, TableCell as DocxTableCellT } from "docx";
+import { createRequire } from "node:module";
+const _req = createRequire(import.meta.url);
+const {
   Document,
   Packer,
   Paragraph,
@@ -16,11 +33,11 @@ import {
   HeadingLevel,
   AlignmentType,
   BorderStyle,
-  Table as DocxTable,
-  TableRow as DocxTableRow,
-  TableCell as DocxTableCell,
+  Table: DocxTable,
+  TableRow: DocxTableRow,
+  TableCell: DocxTableCell,
   WidthType,
-} from "docx";
+} = _req("docx") as typeof import("docx");
 import sharp from "sharp";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -33,7 +50,7 @@ interface TipTapNode {
   marks?: { type: string }[];
 }
 
-type InlineChild = TextRun | ImageRun | ReturnType<(typeof import("@hungknguyen/docx-math-converter"))["convertLatex2Math"]>;
+type InlineChild = TextRunT | ImageRunT | ReturnType<(typeof import("@hungknguyen/docx-math-converter"))["convertLatex2Math"]>;
 
 const MAX_PAGE_WIDTH_PX = 560; // A4 正文区约 560px @96dpi
 
@@ -87,9 +104,9 @@ async function inlineChildren(node: TipTapNode): Promise<InlineChild[]> {
     const latex = (node.attrs?.text as string) || (node.attrs?.latex as string) || "";
     if (latex) {
       try {
-        const { convertLatex2Math } = await loadMath();
-        out.push(convertLatex2Math(latex));
-      } catch {
+        out.push(await latexToMathObj(latex));
+      } catch (e) {
+        console.warn("[export-lecture] 公式转换失败:", latex.slice(0, 50), e instanceof Error ? e.message : e);
         out.push(new TextRun({ text: `【公式：${latex}】`, size: 22, italics: true, font: "SimSun", color: "999999" }));
       }
     }
@@ -137,14 +154,14 @@ const headingMap: Record<number, (typeof HeadingLevel)[keyof typeof HeadingLevel
   3: HeadingLevel.HEADING_3,
 };
 
-async function blockToParagraphs(block: TipTapNode): Promise<(Paragraph | DocxTable)[]> {
+async function blockToParagraphs(block: TipTapNode): Promise<(ParagraphT | DocxTableT)[]> {
   // 表格
   if (block.type === "table") {
     const rows = (block.content || []).filter((r) => r.type === "tableRow");
-    const docxRows: DocxTableRow[] = [];
+    const docxRows: DocxTableRowT[] = [];
     for (const row of rows) {
       const cells = row.content || [];
-      const cellNodes: DocxTableCell[] = [];
+      const cellNodes: DocxTableCellT[] = [];
       for (const cell of cells) {
         const kids: InlineChild[] = [];
         for (const cb of cell.content || []) kids.push(...(await inlineChildren(cb)));
@@ -169,7 +186,7 @@ async function blockToParagraphs(block: TipTapNode): Promise<(Paragraph | DocxTa
 
   // 列表
   if (block.type === "bulletList" || block.type === "orderedList") {
-    const out: Paragraph[] = [];
+    const out: ParagraphT[] = [];
     for (const item of block.content || []) {
       const kids: InlineChild[] = [];
       for (const cb of item.content || []) kids.push(...(await inlineChildren(cb)));
@@ -184,7 +201,7 @@ async function blockToParagraphs(block: TipTapNode): Promise<(Paragraph | DocxTa
   }
 
   const kids = await inlineChildren(block);
-  const onlyImages = kids.length > 0 && kids.every((k) => k instanceof ImageRun);
+  const onlyImages = kids.length > 0 && kids.every((k) => k instanceof (ImageRun as never));
   if (kids.length === 0) return [new Paragraph({ spacing: { after: 120 } })];
 
   return [new Paragraph({
@@ -197,14 +214,13 @@ async function blockToParagraphs(block: TipTapNode): Promise<(Paragraph | DocxTa
 
 /** 讲义 TipTap JSON → docx Buffer */
 export async function lectureToDocxBuffer(title: string, docJson: string): Promise<Buffer> {
-  await loadMath();
   let root: TipTapNode;
   try {
     root = JSON.parse(docJson);
   } catch {
     root = { type: "doc", content: [] };
   }
-  const children: (Paragraph | DocxTable)[] = [
+  const children: (ParagraphT | DocxTableT)[] = [
     new Paragraph({ text: title || "讲义", heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER, spacing: { after: 300 } }),
   ];
   for (const block of root.content || []) {
