@@ -29,14 +29,19 @@ async function ocrWith(base: string, key: string, model: string, image: string):
       }),
       signal: AbortSignal.timeout(30000),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.warn(`[hw-formula] ${model} HTTP ${res.status}: ${body.slice(0, 160)}`);
+      return null;
+    }
     const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     let latex = (data.choices?.[0]?.message?.content || "").trim();
     latex = latex.replace(/^```(?:latex)?\s*/i, "").replace(/```\s*$/, "").trim();
     latex = latex.replace(/^\$+|\$+$/g, "").trim();
     if (!latex || latex.length > 600 || /无法|看不清|抱歉/.test(latex)) return null;
     return latex;
-  } catch {
+  } catch (e) {
+    console.warn(`[hw-formula] ${model} 异常:`, e instanceof Error ? e.message : e);
     return null;
   }
 }
