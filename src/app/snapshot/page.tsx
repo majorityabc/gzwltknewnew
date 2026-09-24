@@ -8,6 +8,9 @@ import FigureReview from "@/components/figure-review";
 
 /** 拍照转 Word（快速组卷）：多张照片 → kimi 识别 → 直接导出 Word / 分割入库 */
 
+// docx-math-converter 的 MathJax 在 SSR 预渲染时报错，此页强制动态渲染
+export const dynamic = "force-dynamic";
+
 interface ImageItem {
   id: number;
   file: File;

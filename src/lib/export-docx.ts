@@ -1,4 +1,12 @@
-import { mathJaxReady, convertLatex2Math } from "@hungknguyen/docx-math-converter";
+// MathJax 在 SSR 求值时崩溃，必须运行时动态加载
+let _mathMod: typeof import("@hungknguyen/docx-math-converter") | null = null;
+async function loadMath() {
+  if (!_mathMod) {
+    _mathMod = await import("@hungknguyen/docx-math-converter");
+    await _mathMod.mathJaxReady();
+  }
+  return _mathMod;
+}
 import {
   Document,
   Packer,
@@ -151,6 +159,7 @@ async function tipTapNodeToInlineChildren(
     const latex = (node.attrs?.text as string) || "";
     if (latex) {
       try {
+        const { convertLatex2Math } = await loadMath();
         const mathObj = convertLatex2Math(latex);
         results.push(mathObj);
       } catch (err) {
@@ -241,7 +250,7 @@ export async function exportProblemsToDocx(
   includeAnswers = false,
 ): Promise<void> {
   // Wait for MathJax to initialize (loads fonts + macros)
-  await mathJaxReady();
+  const { convertLatex2Math } = await loadMath();
 
   const problemMap = new Map(problems.map((p) => [p.id, p]));
   const ordered = [...basketItems].sort((a, b) => a.order - b.order);
@@ -487,7 +496,7 @@ export async function exportBlocksToDocxDownload(
   title: string,
   blockNodes: TipTapNode[],
 ): Promise<void> {
-  await mathJaxReady();
+  const { convertLatex2Math } = await loadMath();
 
   const docChildren: (Paragraph | DocxTable)[] = [];
 
