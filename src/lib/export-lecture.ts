@@ -247,8 +247,10 @@ async function blockToParagraphs(block: TipTapNode): Promise<(ParagraphT | DocxT
     children: kids,
     heading: isHeading ? headingMap[(block.attrs?.level as number) || 1] || HeadingLevel.HEADING_3 : undefined,
     alignment,
-    // 正文段落首行缩进 2 字符（对齐显式设为左/两端/未设时生效；标题、纯图段、居中/右对齐不缩）
+    // 首行缩进跟随编辑器段落属性：textIndent="0" 显式关闭才不缩（默认 2em 缩进）
+    // 标题、纯图段、居中/右对齐段落始终不缩
     indent: !isHeading && !onlyImages && (!ta || ta === "left" || ta === "justify")
+      && (block.attrs?.textIndent !== "0" && block.attrs?.textIndent !== "0em")
       ? { firstLine: 480 }  // 480 twips = 2 × 小四号字宽
       : undefined,
     spacing: { after: 120 },
