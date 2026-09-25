@@ -12,21 +12,29 @@ const execFileAsync = promisify(execFile);
 
 const UNDERSTAND_PROMPT = `这是一张中学物理老师手绘的示意图。请理解图中的物理内容，输出结构化 JSON（只输出 JSON，不要任何其他文字）。
 
-{
-  "model": "模型类型（目前支持：pendulum_force_decomposition=单摆受力分解；若不属于已知模型，填 unknown）",
-  "confidence": 0.0到1.0（你对模型判断的把握），
-  "params": {
-    "theta_deg": 摆角角度数字（估计值，如 30）,
-    "angle_label": "角度标注（默认 θ，照原图）",
-    "show_mg": true/false（是否有竖直向下的重力箭头。注意：竖直向下的重力最容易被漏看，请仔细检查）,
-    "show_mgcos": true/false（是否有沿绳方向的分力）,
-    "show_mgsin": true/false（是否有垂直绳方向的分力）,
-    "label_mg": "重力标注（默认 mg，照原图）",
-    "label_cos": "沿绳分力标注（默认 mgcosθ，照原图）",
-    "label_sin": "垂直绳分力标注（默认 mgsinθ，照原图）",
-    "ball_label": "小球标注（没有则省略此字段）"
-  }
-}
+已知模型与参数：
+
+【模型1】pendulum_force_decomposition = 单摆受力分解（摆球被绳拉着偏开，有重力/分力箭头）
+params:
+  "theta_deg": 摆角角度数字（估计值，如 30）,
+  "angle_label": "角度标注（默认 θ，照原图）",
+  "show_mg": true/false（是否有竖直向下的重力箭头。注意：竖直向下的重力最容易被漏看，请仔细检查）,
+  "show_mgcos": true/false（是否有沿绳方向的分力）,
+  "show_mgsin": true/false（是否有垂直绳方向的分力）,
+  "label_mg"/"label_cos"/"label_sin": 力的标注（默认 mg/mgcosθ/mgsinθ，照原图）,
+  "ball_label": 小球标注（没有则省略）
+
+【模型2】parabola_step_decomposition = 抛物线轨迹阶梯分解图（多条带箭头的水平平行线 + 一条上凸抛物线轨迹穿过平行线 + 阶梯状投影线。常见于平抛/类平抛运动、带电粒子在电场中偏转）
+params:
+  "n_lines": 平行线数量数字（2~6，默认 4）,
+  "exponent": 抛物线陡峭程度（默认 2，弯曲越陡值越大）,
+  "labels_curve": "轨迹上点的标注，逗号分隔（照原图，默认 C1,C2）",
+  "labels_foot": "阶梯脚的标注，逗号分隔（照原图，默认 B1,B2,B3）",
+  "label_A": "左下角标注（默认 A，没有则填空串）",
+  "label_B": "右下角标注（默认 B，没有则填空串）",
+  "label_C": "顶部标注（默认 C，没有则填空串）"
+
+输出 JSON 格式：{"model": "模型名（不属于已知模型填 unknown）", "confidence": 0.0到1.0, "params": {...}}
 
 要求：忠实原图，不脑补；params 里只填该模型需要的字段。`;
 
