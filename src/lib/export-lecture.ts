@@ -232,10 +232,25 @@ async function blockToParagraphs(block: TipTapNode): Promise<(ParagraphT | DocxT
   const onlyImages = kids.length > 0 && kids.every((k) => k instanceof (ImageRun as never));
   if (kids.length === 0) return [new Paragraph({ spacing: { after: 120 } })];
 
+  // 编辑器 textAlign → Word 对齐
+  const ta = block.attrs?.textAlign as string | undefined;
+  const alignMap: Record<string, (typeof AlignmentType)[keyof typeof AlignmentType]> = {
+    left: AlignmentType.LEFT,
+    center: AlignmentType.CENTER,
+    right: AlignmentType.RIGHT,
+    justify: AlignmentType.JUSTIFIED,
+  };
+  const isHeading = block.type === "heading";
+  const alignment = onlyImages ? AlignmentType.CENTER : (ta && alignMap[ta]) || undefined;
+
   return [new Paragraph({
     children: kids,
-    heading: block.type === "heading" ? headingMap[(block.attrs?.level as number) || 1] || HeadingLevel.HEADING_3 : undefined,
-    alignment: onlyImages ? AlignmentType.CENTER : undefined,
+    heading: isHeading ? headingMap[(block.attrs?.level as number) || 1] || HeadingLevel.HEADING_3 : undefined,
+    alignment,
+    // 正文段落首行缩进 2 字符（对齐显式设为左/两端/未设时生效；标题、纯图段、居中/右对齐不缩）
+    indent: !isHeading && !onlyImages && (!ta || ta === "left" || ta === "justify")
+      ? { firstLine: 480 }  // 480 twips = 2 × 小四号字宽
+      : undefined,
     spacing: { after: 120 },
   })];
 }
