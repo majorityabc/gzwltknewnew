@@ -99,7 +99,7 @@ def main():
         sys.exit(2)
     fig = fn(spec.get("params", {}))
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", facecolor="white", dpi=150)
+    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.04, facecolor="white", dpi=150)
     plt.close(fig)
     sys.stdout.write(base64.b64encode(buf.getvalue()).decode())
 
