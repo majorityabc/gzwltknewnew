@@ -7,6 +7,29 @@ const execFileAsync = promisify(execFile);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _convertMathMl2Math: ((mml: string) => any) | null = null;
+let _formulaAsImage = false; // PDF 导出时公式渲染为图片（LibreOffice 对 OMML 支持差）
+
+async function latexToMathPng(latex: string): Promise<ImageRunT | null> {
+  try {
+    const { stdout } = await execFileAsync("node", ["scripts/latex2png.mjs", latex], {
+      cwd: "/root/gzwltknewnew",
+      timeout: 30000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    const buf = Buffer.from(stdout.trim(), "base64");
+    if (!buf.length) return null;
+    const meta = await sharp(buf).metadata();
+    const w0 = meta.width || 100;
+    const h0 = meta.height || 30;
+    // 缩放到正文合理尺寸：高度 ≈ 18px（行内公式）
+    const h = Math.max(14, Math.min(40, Math.round(h0 / 4)));
+    const w = Math.round((w0 / h0) * h);
+    return new ImageRun({ type: "png", data: buf, transformation: { width: w, height: h } });
+  } catch (e) {
+    console.warn("[export-lecture] 公式转图失败:", latex.slice(0, 40), e instanceof Error ? e.message : e);
+    return null;
+  }
+}
 
 async function latexToMathObj(latex: string) {
   if (!_convertMathMl2Math) {
@@ -104,7 +127,12 @@ async function inlineChildren(node: TipTapNode): Promise<InlineChild[]> {
     const latex = (node.attrs?.text as string) || (node.attrs?.latex as string) || "";
     if (latex) {
       try {
-        out.push(await latexToMathObj(latex));
+        if (_formulaAsImage) {
+          const img = await latexToMathPng(latex);
+          if (img) { out.push(img); } else { out.push(new TextRun({ text: latex, size: 22, font: "SimSun" })); }
+        } else {
+          out.push(await latexToMathObj(latex));
+        }
       } catch (e) {
         console.warn("[export-lecture] 公式转换失败:", latex.slice(0, 50), e instanceof Error ? e.message : e);
         out.push(new TextRun({ text: `【公式：${latex}】`, size: 22, italics: true, font: "SimSun", color: "999999" }));
@@ -213,7 +241,8 @@ async function blockToParagraphs(block: TipTapNode): Promise<(ParagraphT | DocxT
 }
 
 /** 讲义 TipTap JSON → docx Buffer */
-export async function lectureToDocxBuffer(title: string, docJson: string): Promise<Buffer> {
+export async function lectureToDocxBuffer(title: string, docJson: string, opts?: { formulaAsImage?: boolean }): Promise<Buffer> {
+  _formulaAsImage = !!opts?.formulaAsImage;
   let root: TipTapNode;
   try {
     root = JSON.parse(docJson);

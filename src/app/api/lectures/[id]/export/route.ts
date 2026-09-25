@@ -27,7 +27,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
   let docxBuf: Buffer;
   try {
-    docxBuf = await lectureToDocxBuffer(lec.title, lec.content || "{}");
+    docxBuf = await lectureToDocxBuffer(lec.title, lec.content || "{}", { formulaAsImage: format === "pdf" });
   } catch (e) {
     console.error("[lecture-export] docx 生成失败:", e);
     return NextResponse.json({ error: "导出失败，请重试" }, { status: 500 });
