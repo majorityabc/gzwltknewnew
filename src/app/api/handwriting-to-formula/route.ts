@@ -28,7 +28,8 @@ async function ocrWith(base: string, key: string, model: string, image: string):
                 text: `这是一张手写的物理公式图片。请精确转成 LaTeX。
 规则：只输出 LaTeX 代码本身，不要用 $ 包裹，不要任何解释；
 上下标用 ^ 和 _（如 F_1、v^2），分数 \\frac{a}{b}，根号 \\sqrt{x}，希腊字母 \\alpha \\theta \\omega \\pi \\Delta 等；
-向量写法 \\overrightarrow{AB}；手写连笔要按最合理的物理公式理解；看不清的字符给最合理猜测。`,
+向量写法 \\overrightarrow{AB}；手写连笔要按最合理的物理公式理解；看不清的字符给最合理猜测。
+特别注意：手写的圆圈数字序号（圈1、圈2…，即 ①②③④⑤⑥⑦⑧⑨⑩）必须识别并输出为 \\text{①} 这种形式（\\text{} 里放对应 Unicode 圈号字符），不要忽略、不要写成普通数字。`,
               },
               { type: "image_url", image_url: { url: image } },
             ],
