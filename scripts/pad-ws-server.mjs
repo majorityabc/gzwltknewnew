@@ -71,11 +71,14 @@ wss.on("connection", async (ws, req) => {
   ws.on("message", (data) => {
     let msg;
     try { msg = JSON.parse(data.toString()); } catch { return; }
-    if (msg.kind === "image" || msg.kind === "formula") {
+    if (msg.kind === "image" || msg.kind === "formula" || msg.kind === "replace-image") {
       if (role !== "pad") return; // 只有 pad 能产出内容
       const out = JSON.stringify(msg);
       if (room.editors.size) broadcast(room, room.editors, out);
       else if (room.queue.length < 50) room.queue.push({ ...msg, _qAt: Date.now() });
+    } else if (msg.kind === "edit-image") {
+      if (role !== "editor") return; // 只有编辑器能发图给 pad
+      broadcast(room, room.pads, JSON.stringify(msg));
     }
   });
 
