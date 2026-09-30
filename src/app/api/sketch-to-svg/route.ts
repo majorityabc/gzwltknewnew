@@ -1,4 +1,26 @@
 import { NextResponse } from "next/server";
+import { readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileP = promisify(execFile);
+
+/** Kimi Code OAuth token（15 分钟过期，用 CLI 代刷） */
+function readKimiCreds(): { access_token: string; expires_at?: number } {
+  const file = process.env.KIMI_CRED_FILE || "/root/.kimi-code/credentials/kimi-code.json";
+  return JSON.parse(readFileSync(file, "utf8"));
+}
+
+async function getKimiToken(force = false): Promise<string> {
+  const creds = readKimiCreds();
+  if (creds.expires_at && creds.expires_at - Date.now() / 1000 > 120 && !force) return creds.access_token;
+  try {
+    await execFileP(process.env.KIMI_CLI || "/root/.kimi-code/bin/kimi", ["-p", "hi"], { timeout: 150000 });
+  } catch (e) {
+    console.warn("[sketch-svg] kimi CLI refresh failed:", e instanceof Error ? e.message : e);
+  }
+  return readKimiCreds().access_token;
+}
 
 // POST /api/sketch-to-svg { image: dataURL } → { svg }
 // 手绘物理示意图 → 规范电子矢量图（glm-4.6v 主力，deepseek-flash 兜底）
@@ -40,7 +62,8 @@ async function genWith(base: string, key: string, model: string, image: string):
           { role: "user", content: [{ type: "text", text: PROMPT }, { type: "image_url", image_url: { url: image } }] },
         ],
         max_tokens: 8000,
-        temperature: 0.2,
+        // kimi k3 只允许 temperature=1，其他模型用 0.2 求稳
+        ...(model === (process.env.KIMI_OCR_MODEL || "k3") ? {} : { temperature: 0.2 }),
       }),
       signal: AbortSignal.timeout(90000),
     });
@@ -64,7 +87,17 @@ export async function POST(req: Request) {
   if (typeof image !== "string" || !image.startsWith("data:image/")) {
     return NextResponse.json({ error: "缺 image（dataURL）" }, { status: 400 });
   }
-  // deepseek-flash 先试（SVG 生成更稳），glm-4.6v 兜底
+  // Kimi k3 主力（用户指定：图形理解更准）
+  try {
+    const kimiBase = process.env.KIMI_OCR_BASE || "https://api.kimi.com/coding/v1";
+    const kimiModel = process.env.KIMI_OCR_MODEL || "k3";
+    const token = await getKimiToken();
+    const svg = await genWith(kimiBase, token, kimiModel, image);
+    if (svg) return NextResponse.json({ data: { svg, via: `kimi-${kimiModel}` } });
+  } catch (e) {
+    console.warn("[sketch-svg] kimi 链路异常:", e instanceof Error ? e.message : e);
+  }
+  // deepseek-flash 兜底，glm-4.6v 再兜底
   const dsKey = process.env.DEEPSEEK_API_KEY;
   const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
   const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
