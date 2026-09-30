@@ -97,21 +97,21 @@ export async function POST(req: Request) {
   } catch (e) {
     console.warn("[sketch-svg] kimi 链路异常:", e instanceof Error ? e.message : e);
   }
-  // deepseek-flash 兜底，glm-4.6v 再兜底
-  const dsKey = process.env.DEEPSEEK_API_KEY;
-  const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
-  const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
-  if (dsKey) {
-    const svg = await genWith(dsBase, dsKey, dsModel, image);
-    if (svg) return NextResponse.json({ data: { svg, via: dsModel } });
-  }
-  // glm-4.6v 图形理解更准，优先
+  // glm-4.6v 次选（视觉模型，图形理解好）
   const zaiKey = process.env.ZAI_API_KEY;
   const zaiBase = process.env.ZAI_OCR_BASE || "https://api.z.ai/api/coding/paas/v4";
   const zaiModel = process.env.ZAI_OCR_MODEL || "glm-4.6v";
   if (zaiKey) {
     const svg = await genWith(zaiBase, zaiKey, zaiModel, image);
     if (svg) return NextResponse.json({ data: { svg, via: zaiModel } });
+  }
+  // deepseek-flash 最后兜底
+  const dsKey = process.env.DEEPSEEK_API_KEY;
+  const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
+  const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
+  if (dsKey) {
+    const svg = await genWith(dsBase, dsKey, dsModel, image);
+    if (svg) return NextResponse.json({ data: { svg, via: dsModel } });
   }
   return NextResponse.json({ error: "转换失败，请重试或用原图" }, { status: 502 });
 }
