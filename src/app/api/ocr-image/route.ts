@@ -195,9 +195,11 @@ async function callKimi(messages: unknown[], maxTokens: number): Promise<string>
 const FIGURE_PROMPT = `你负责处理试卷图片里的示意图。图片上叠加了红色网格与 0-1000 坐标刻度（列标签在顶部、行标签在左侧），请对照网格读出准确坐标。对图中的每个示意图（不含纯文字段落）输出一个处理方案，只输出一个 JSON 对象，格式：
 {"figures":[{"mode":"crop","box":[x1,y1,x2,y2]},{"mode":"svg","svg":"<svg ...>...</svg>"}]}
 规则：
-1. 优先用 crop：示意图能被一个矩形框完整框住、且矩形内基本没有混入正文文字时，用 crop。box 坐标归一化到 0-1000，框要稍大于图形本身（留白 2%），确保完整。
-2. 当示意图与文字紧密交织、任何矩形都会裁进大量文字时，用 svg 重绘：用简洁的白底黑线物理示意图风格（线宽 2-3，viewBox="0 0 800 400"，必要文字标注用 <text>），还原原图的物理要素（如测速仪、汽车、声波弧线、方向箭头等）。
-3. 多个示意图按从上到下排列。只输出 JSON。`;
+1. 【最重要】公式不是示意图！任何数学表达式（含分式、根号、上下标、希腊字母的式子，无论独占一行还是嵌入文字中）都绝不要框选，它们已由另一路识别成 LaTeX。你只处理真正的「图」：电路图、受力分析图、光路图、运动示意图、坐标图像、实验装置图、几何图形。
+2. 优先用 crop：示意图能被一个矩形框完整框住、且矩形内基本没有混入正文文字时，用 crop。box 坐标归一化到 0-1000，框要稍大于图形本身（留白 2%），确保完整。
+3. 当示意图与文字紧密交织、任何矩形都会裁进大量文字时，用 svg 重绘：用简洁的白底黑线物理示意图风格（线宽 2-3，viewBox="0 0 800 400"，必要文字标注用 <text>），还原原图的物理要素（如测速仪、汽车、声波弧线、方向箭头等）。
+4. 拿不准是公式还是图时，一律不框（漏框比错框代价小）。
+5. 多个示意图按从上到下排列。只输出 JSON。`;
 
 /** 在原图上叠加 0-1000 红色坐标网格，帮助模型读准坐标 */
 async function withGrid(buffer: Buffer): Promise<string> {
@@ -300,6 +302,8 @@ async function collectFigureItems(
       const h = ((y2 - y1) / 1000) * H;
       if (w < 20 || h < 20) { console.warn(`[figure] box too small rejected: ${sp.box}`); return false; }
       if ((x2 - x1) * (y2 - y1) > 700 * 700) { console.warn(`[figure] box too large rejected: ${sp.box}`); return false; }
+      // 极扁宽的框基本是公式行不是图（宽高比>8 且高度不足一行图的体量）
+      if (w / h > 8 && h < 150) { console.warn(`[figure] 扁宽框疑似公式行，拒绝: ${sp.box} (${Math.round(w)}x${Math.round(h)})`); return false; }
       return true;
     })
     .sort((a, b) => (a.box![1] - b.box![1]) || (a.box![0] - b.box![0]))
