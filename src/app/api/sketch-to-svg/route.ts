@@ -37,7 +37,8 @@ const PROMPT = `这是一张手绘的物理示意图（可能是电路图、受�
 6. 线条对齐网格，元件均匀分布，整体比手绘稿规整
 7. 只输出 SVG 代码本身：不要 markdown 代码块、不要任何解释文字
 8. 不要使用 <script>、<foreignObject>、外部引用
-9. 关键：图中所有元件一个都不能丢。特别注意——回路中若出现一长一短两条平行线（无论横竖），那是电池/电源，必须画成标准电池符号（长细线+短粗线对）；手绘再潦草也要按「这是一个完整电路」去理解`;
+9. 关键：图中所有元件一个都不能丢。特别注意——回路中若出现一长一短两条平行线（无论横竖），那是电池/电源，必须画成标准电池符号（长细线+短粗线对）；手绘再潦草也要按「这是一个完整电路」去理解
+10. 输出紧凑：不要空行、不要注释，直接给最小化 SVG。`;
 
 function extractSvg(text: string): string | null {
   const t = text.replace(/^```(?:svg|xml)?\s*/i, "").replace(/```\s*$/, "").trim();
@@ -51,17 +52,20 @@ function extractSvg(text: string): string | null {
   return svg;
 }
 
-async function genWith(base: string, key: string, model: string, image: string): Promise<string | null> {
+async function genWith(base: string, key: string, model: string, image: string, context: string): Promise<string | null> {
   try {
+    const prompt = context
+      ? `${PROMPT}\n\n【讲义上下文】用户正在编辑的讲义内容如下，画图主题很可能与之相关，识别时请参考：\n${context}`
+      : PROMPT;
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model,
         messages: [
-          { role: "user", content: [{ type: "text", text: PROMPT }, { type: "image_url", image_url: { url: image } }] },
+          { role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: image } }] },
         ],
-        max_tokens: 8000,
+        max_tokens: 4000,
         // kimi k3 只允许 temperature=1，其他模型用 0.2 求稳
         ...(model === (process.env.KIMI_OCR_MODEL || "k3") ? {} : { temperature: 0.2 }),
       }),
@@ -83,34 +87,48 @@ async function genWith(base: string, key: string, model: string, image: string):
 }
 
 export async function POST(req: Request) {
-  const { image } = await req.json();
+  const { image, docId } = await req.json();
   if (typeof image !== "string" || !image.startsWith("data:image/")) {
     return NextResponse.json({ error: "缺 image（dataURL）" }, { status: 400 });
   }
-  // Kimi k3 主力（用户指定：图形理解更准）
-  try {
-    const kimiBase = process.env.KIMI_OCR_BASE || "https://api.kimi.com/coding/v1";
-    const kimiModel = process.env.KIMI_OCR_MODEL || "k3";
-    const token = await getKimiToken();
-    const svg = await genWith(kimiBase, token, kimiModel, image);
-    if (svg) return NextResponse.json({ data: { svg, via: `kimi-${kimiModel}` } });
-  } catch (e) {
-    console.warn("[sketch-svg] kimi 链路异常:", e instanceof Error ? e.message : e);
+  // 拉讲义正文做上下文（去 HTML 标签截 600 字，帮模型猜主题）
+  let context = "";
+  if (docId) {
+    try {
+      const { prisma } = await import("@/lib/prisma");
+      const lec = await prisma.lecture.findUnique({ where: { id: Number(docId) }, select: { title: true, content: true } });
+      if (lec) {
+        const text = lec.content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        context = `标题「${lec.title}」。正文摘录：${text.slice(0, 600)}`;
+      }
+    } catch { /* 拉不到不阻塞 */ }
   }
-  // glm-4.6v 次选（视觉模型，图形理解好）
+  // kimi k3 + glm-4.6v 赛跑：并行发，先出合法 SVG 的赢（时延 = 快者而非串行之和）
+  const racers: Promise<{ svg: string; via: string } | null>[] = [
+    getKimiToken()
+      .then((token) => genWith(process.env.KIMI_OCR_BASE || "https://api.kimi.com/coding/v1", token, process.env.KIMI_OCR_MODEL || "k3", image, context))
+      .then((svg) => (svg ? { svg, via: `kimi-${process.env.KIMI_OCR_MODEL || "k3"}` } : null))
+      .catch(() => null),
+  ];
   const zaiKey = process.env.ZAI_API_KEY;
   const zaiBase = process.env.ZAI_OCR_BASE || "https://api.z.ai/api/coding/paas/v4";
   const zaiModel = process.env.ZAI_OCR_MODEL || "glm-4.6v";
   if (zaiKey) {
-    const svg = await genWith(zaiBase, zaiKey, zaiModel, image);
-    if (svg) return NextResponse.json({ data: { svg, via: zaiModel } });
+    racers.push(
+      genWith(zaiBase, zaiKey, zaiModel, image, context)
+        .then((svg) => (svg ? { svg, via: zaiModel } : null))
+        .catch(() => null),
+    );
   }
-  // deepseek-flash 最后兜底
+  const winner = (await Promise.all(racers)).find((r) => r);
+  if (winner) return NextResponse.json({ data: { svg: winner.svg, via: winner.via } });
+
+  // 全挂 → deepseek-flash 最后兜底
   const dsKey = process.env.DEEPSEEK_API_KEY;
   const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
   const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
   if (dsKey) {
-    const svg = await genWith(dsBase, dsKey, dsModel, image);
+    const svg = await genWith(dsBase, dsKey, dsModel, image, context);
     if (svg) return NextResponse.json({ data: { svg, via: dsModel } });
   }
   return NextResponse.json({ error: "转换失败，请重试或用原图" }, { status: 502 });
