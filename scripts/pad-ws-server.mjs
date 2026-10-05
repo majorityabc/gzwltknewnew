@@ -16,7 +16,7 @@ const secret = (() => {
 const rooms = new Map(); // docId -> { editors:Set<ws>, pads:Set<ws>, queue:object[] }
 
 function getRoom(docId) {
-  if (!rooms.has(docId)) rooms.set(docId, { editors: new Set(), pads: new Set(), queue: [] });
+  if (!rooms.has(docId)) rooms.set(docId, { editors: new Set(), pads: new Set(), queue: [], padQueue: [] });
   return rooms.get(docId);
 }
 
@@ -67,6 +67,13 @@ wss.on("connection", async (ws, req) => {
     }
     room.queue = [];
   }
+  // pad 上线：补投编辑器在 pad 离线期间发的图/公式（30 分钟内，只留最后一条）
+  if (role === "pad" && room.padQueue.length) {
+    const fresh = room.padQueue.filter((m) => Date.now() - (m._qAt || 0) < 30 * 60 * 1000);
+    const last = fresh[fresh.length - 1];
+    if (last) { const { _qAt, ...clean } = last; ws.send(JSON.stringify(clean)); }
+    room.padQueue = [];
+  }
 
   ws.on("message", (data) => {
     let msg;
@@ -78,14 +85,15 @@ wss.on("connection", async (ws, req) => {
       else if (room.queue.length < 50) room.queue.push({ ...msg, _qAt: Date.now() });
     } else if (msg.kind === "edit-image" || msg.kind === "edit-formula") {
       if (role !== "editor") return; // 只有编辑器能发图给 pad
-      broadcast(room, room.pads, JSON.stringify(msg));
+      if (room.pads.size) broadcast(room, room.pads, JSON.stringify(msg));
+      else room.padQueue = [{ ...msg, _qAt: Date.now() }];  // pad 离线：只留最新一条，上线补投
     }
   });
 
   ws.on("close", () => {
     (role === "pad" ? room.pads : room.editors).delete(ws);
     broadcast(room, room.editors, padStatus(room));
-    if (!room.editors.size && !room.pads.size && !room.queue.length) rooms.delete(docId);
+    if (!room.editors.size && !room.pads.size && !room.queue.length && !room.padQueue.length) rooms.delete(docId);
   });
 });
 
