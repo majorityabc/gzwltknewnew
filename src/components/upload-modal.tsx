@@ -90,6 +90,23 @@ function RenderRun({ run }: { run: ParagraphRun }) {
 
 const QUESTION_TYPES = ["单选", "多选", "实验", "计算"];
 
+// 段落渲染：普通段落画 runs，表格行段落（OCR 识别出的一行表格，tableCells=该行各单元格的 runs）画成一行
+function RenderParagraph({ para }: { para: DocParagraph }) {
+  if (para.tableCells && para.tableCells.length) {
+    return (
+      <span className="inline-block border border-dashed border-gray-300 rounded px-2 py-0.5 bg-gray-50">
+        {para.tableCells.map((cell, ci) => (
+          <span key={ci}>
+            {ci > 0 && <span className="text-gray-400"> ｜ </span>}
+            {(cell || []).map((run, k) => <RenderRun key={k} run={run} />)}
+          </span>
+        ))}
+      </span>
+    );
+  }
+  return <>{(para.runs || []).map((run, j) => <RenderRun key={j} run={run} />)}</>;
+}
+
 interface BatchItem {
   id: number;
   file: File;
@@ -210,7 +227,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
     if (pptx) {
       setError(null);
       setLoading(true);
-      setLoadingText("正在解析 PPT（转图 + 提取文字，大文件需要 1-2 分钟）...");
+      setLoadingText("正在解析 PPT 页面（约 30 秒）...");
       setSplitIndices(new Set());
       setProblems([]);
       setSavedCount(null);
@@ -230,18 +247,22 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
         if (!res.ok) throw new Error(d.error || "解析失败");
         const slides: { page: number; image: string; text: string }[] = d.slides || [];
         if (!slides.length) throw new Error("PPT 里没有解析出任何页面");
-        // 每页 = 一道题：整页图 + 提取的文字；页末自动打分割点
-        const paragraphs: DocParagraph[] = [];
-        const splits = new Set<number>();
-        slides.forEach((s, i) => {
-          paragraphs.push({ runs: [{ type: "image", src: s.image }] });
-          for (const line of s.text.split("\n").map((t) => t.trim()).filter(Boolean)) {
-            paragraphs.push({ runs: [{ type: "text", text: line }] });
-          }
-          if (i < slides.length - 1) splits.add(paragraphs.length - 1);
-        });
-        setSplitIndices(splits);
-        setParsedDoc({ paragraphs });
+        // 每页图转 File，走和截图一样的 OCR 批量识别管线（公式→可编辑、插图自动裁剪）
+        const items: BatchItem[] = [];
+        for (const s of slides.slice(0, 20)) {
+          const blob = await (await fetch(s.image)).blob();
+          const f = new File([blob], `PPT第${s.page}页.png`, { type: "image/png" });
+          items.push({
+            id: ++batchIdRef.current,
+            file: f,
+            url: URL.createObjectURL(f),
+            status: "processing",
+            text: "排队中...",
+            progress: 0,
+          });
+        }
+        setBatch(items);
+        items.forEach((it) => { void recognizeBatchImage(it); });
       } catch (e) {
         setError(e instanceof Error ? e.message : "PPT 解析失败");
       } finally {
@@ -655,7 +676,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
               <input ref={fileInputRef} type="file" accept=".docx,.pptx,.ppt,.png,.jpg,.jpeg,.webp,.bmp" multiple onChange={handleInputChange} className="hidden" />
               <div className="text-4xl mb-3">📄</div>
               <p className="text-lg text-gray-600">拖拽 .docx/.pptx 试卷或题目图片到此处，或点击选择（图片可多选）</p>
-              <p className="text-sm text-blue-500 mt-1">💡 支持 Ctrl + V 直接粘贴：Word/PPT 里复制的题目（文字+图）、截图（自动 OCR）</p>
+              <p className="text-sm text-blue-500 mt-1">💡 支持 Ctrl + V 直接粘贴：Word/PPT 里复制的题目（文字+图）、截图（自动 OCR）；PPT 文件每页自动识别成一道题</p>
               <p className="text-sm text-gray-400 mt-2">题目将自动归类到「{kpName}」</p>
             </div>
           )}
@@ -746,16 +767,14 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
                           }`}
                         >
                           {splitIndices.has(i - 1)
-                            ? `第 ${[...splitIndices].filter((s) => s <= i - 1).length} 题开始`
+                            ? `第 ${[...splitIndices].filter((s) => s <= i - 1).length + 1} 题开始`
                             : "在此分割"}
                         </button>
                       </div>
                     )}
                     <div className={`px-5 py-3 ${para.style?.startsWith("Heading") ? "bg-blue-50 font-bold text-lg" : ""}`}>
                       <p className="leading-relaxed text-base">
-                        {para.runs.map((run, j) => (
-                          <RenderRun key={j} run={run} />
-                        ))}
+                        <RenderParagraph para={para} />
                       </p>
                     </div>
                   </div>
@@ -788,9 +807,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
                   <div className="px-5 py-4 text-base leading-relaxed">
                     {problem.paragraphs.map((para, i) => (
                       <p key={i} className={para.style?.startsWith("Heading") ? "font-bold text-lg mb-2" : "mb-1"}>
-                        {para.runs.map((run, j) => (
-                          <RenderRun key={j} run={run} />
-                        ))}
+                        <RenderParagraph para={para} />
                       </p>
                     ))}
                   </div>
