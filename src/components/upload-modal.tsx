@@ -165,6 +165,9 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
       fd.append("file", item.file);
       const res = await fetch("/tiku/api/ocr-image", { method: "POST", body: fd });
       let data: { data?: { jobId?: string }; error?: string };
+      if (res.redirected) {
+        throw new Error("登录状态已过期：请刷新本页面重新登录后再上传");
+      }
       try { data = await res.json(); } catch {
         throw new Error(`上传请求异常（HTTP ${res.status}），请稍等几秒重试`);
       }
@@ -216,6 +219,13 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
         const fd = new FormData();
         fd.append("file", pptx);
         const res = await fetch("/tiku/api/parse-pptx", { method: "POST", body: fd });
+        // 登录过期时 nginx 会 302 到首页（fetch 自动跟随），返回的是 HTML 而不是 JSON
+        const ct = res.headers.get("content-type") || "";
+        if (!ct.includes("application/json")) {
+          throw new Error(res.redirected
+            ? "登录状态已过期：请刷新本页面重新登录后再上传"
+            : `服务异常（HTTP ${res.status}），请稍等重试`);
+        }
         const d = await res.json();
         if (!res.ok) throw new Error(d.error || "解析失败");
         const slides: { page: number; image: string; text: string }[] = d.slides || [];
@@ -251,6 +261,12 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
         const fd = new FormData();
         fd.append("file", docx);
         const res = await fetch("/tiku/api/parse-docx", { method: "POST", body: fd });
+        const ct = res.headers.get("content-type") || "";
+        if (!ct.includes("application/json")) {
+          throw new Error(res.redirected
+            ? "登录状态已过期：请刷新本页面重新登录后再上传"
+            : `服务异常（HTTP ${res.status}），请稍等重试`);
+        }
         if (!res.ok) {
           const d = await res.json();
           throw new Error(d.error || "解析失败");
