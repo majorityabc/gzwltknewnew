@@ -80,7 +80,7 @@ function fileToDataUrl(file: File | Blob): Promise<string> {
   });
 }
 
-async function readClipboardImages(): Promise<string[]> {
+export async function readClipboardImages(): Promise<string[]> {
   try {
     const items = await navigator.clipboard.read();
     const result: string[] = [];

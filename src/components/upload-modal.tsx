@@ -13,6 +13,8 @@ const RichTextEditor = dynamic(
   { ssr: false },
 );
 import { docParagraphsToTipTapJson } from "@/lib/tip-tap-converter";
+import { htmlToDocContent, textToDocContent, htmlHasMeaningfulText } from "@/lib/html-to-doc";
+import { readClipboardImages } from "@/components/tiptap/rich-text-editor";
 
 interface ProblemTag {
   name: string;
@@ -128,6 +130,14 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
     });
   }, []);
 
+  // 弹窗每次打开时强制重置（保存成功后父组件会直接关弹窗、跳过 handleClose 里的 reset，
+  // 导致下次打开时残留 savedCount → 误显示「上次已成功保存 N 道题」）
+  const prevOpenRef = useRef(false);
+  useEffect(() => {
+    if (open && !prevOpenRef.current) reset();
+    prevOpenRef.current = open;
+  }, [open, reset]);
+
   const handleClose = useCallback(() => {
     // 有识别/编辑内容时二次确认，防误关丢失
     const hasWork =
@@ -191,8 +201,44 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
   // 批量入口
   const handleFiles = useCallback(async (files: File[]) => {
     if (!files.length) return;
+    const pptx = files.find((f) => /\.pptx?$/i.test(f.name));
     const docx = files.find((f) => f.name.toLowerCase().endsWith(".docx"));
     const imgs = files.filter((f) => /\.(png|jpe?g|webp|bmp)$/i.test(f.name));
+    if (pptx) {
+      setError(null);
+      setLoading(true);
+      setLoadingText("正在解析 PPT（转图 + 提取文字，大文件需要 1-2 分钟）...");
+      setSplitIndices(new Set());
+      setProblems([]);
+      setSavedCount(null);
+      setBatch((prev) => { prev.forEach((b) => URL.revokeObjectURL(b.url)); return []; });
+      try {
+        const fd = new FormData();
+        fd.append("file", pptx);
+        const res = await fetch("/tiku/api/parse-pptx", { method: "POST", body: fd });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || "解析失败");
+        const slides: { page: number; image: string; text: string }[] = d.slides || [];
+        if (!slides.length) throw new Error("PPT 里没有解析出任何页面");
+        // 每页 = 一道题：整页图 + 提取的文字；页末自动打分割点
+        const paragraphs: DocParagraph[] = [];
+        const splits = new Set<number>();
+        slides.forEach((s, i) => {
+          paragraphs.push({ runs: [{ type: "image", src: s.image }] });
+          for (const line of s.text.split("\n").map((t) => t.trim()).filter(Boolean)) {
+            paragraphs.push({ runs: [{ type: "text", text: line }] });
+          }
+          if (i < slides.length - 1) splits.add(paragraphs.length - 1);
+        });
+        setSplitIndices(splits);
+        setParsedDoc({ paragraphs });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "PPT 解析失败");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     if (docx) {
       setError(null);
       setLoading(true);
@@ -219,7 +265,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
       return;
     }
     if (!imgs.length) {
-      setError("请选择 .docx 试卷或 .png/.jpg 题目图片");
+      setError("请选择 .docx/.pptx 试卷或 .png/.jpg 题目图片");
       return;
     }
     setError(null);
@@ -255,13 +301,47 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
 
   // 不自动进分割页：等用户点「开始分割」，避免第一张识别完就锁定、后续粘贴被拒收
 
-  // Ctrl+V 直接粘贴截图（弹窗打开且空闲时生效；粘贴文字不受影响）
+  // Ctrl+V 粘贴（弹窗打开且空闲时生效）
+  // 1) 有实质文字的 Word/PPT 富文本 → 直接解析成文档进分割页（不走 OCR）
+  // 2) 纯图片（截图等）→ 走 OCR 识别流程
+  // 3) 纯文本 → 按行分段进分割页
   useEffect(() => {
     if (!open) return;
     const onPaste = (e: ClipboardEvent) => {
       if (loading || parsedDoc) return;
       const items = e.clipboardData?.items;
       if (!items) return;
+
+      // 焦点在输入框/编辑器里时不拦截（Stage 1 没有输入框，保险起见）
+      const ae = document.activeElement as HTMLElement | null;
+      if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return;
+
+      const html = e.clipboardData?.getData("text/html") || "";
+      const plain = e.clipboardData?.getData("text/plain") || "";
+
+      // Word/PPT 复制的富文本（含实质文字）→ 文档解析
+      if (html && htmlHasMeaningfulText(html)) {
+        e.preventDefault();
+        setError(null);
+        setLoading(true);
+        setLoadingText("正在解析粘贴的 Word/PPT 内容...");
+        readClipboardImages().then((imgs) => {
+          const doc = htmlToDocContent(html, imgs);
+          setLoading(false);
+          if (!doc.paragraphs.length) {
+            setError("没有解析出有效内容，请重试或改用截图");
+            return;
+          }
+          setSplitIndices(new Set());
+          setProblems([]);
+          setSavedCount(null);
+          setBatch((prev) => { prev.forEach((b) => URL.revokeObjectURL(b.url)); return []; });
+          setParsedDoc(doc);
+        });
+        return;
+      }
+
+      // 纯图片 → OCR
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
         if (it.type.startsWith("image/")) {
@@ -275,6 +355,19 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
           handleFileRef.current([new File([f], name, { type: it.type })]);
           return;
         }
+      }
+
+      // 纯文本 → 按行分段
+      if (plain.trim()) {
+        e.preventDefault();
+        const doc = textToDocContent(plain);
+        if (!doc.paragraphs.length) return;
+        setError(null);
+        setSplitIndices(new Set());
+        setProblems([]);
+        setSavedCount(null);
+        setBatch((prev) => { prev.forEach((b) => URL.revokeObjectURL(b.url)); return []; });
+        setParsedDoc(doc);
       }
     };
     document.addEventListener("paste", onPaste);
@@ -543,10 +636,10 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
               onClick={() => fileInputRef.current?.click()}
               className="border-2 border-dashed rounded-xl p-16 text-center cursor-pointer transition-colors border-gray-300 hover:border-blue-400 hover:bg-blue-50"
             >
-              <input ref={fileInputRef} type="file" accept=".docx,.png,.jpg,.jpeg,.webp,.bmp" multiple onChange={handleInputChange} className="hidden" />
+              <input ref={fileInputRef} type="file" accept=".docx,.pptx,.ppt,.png,.jpg,.jpeg,.webp,.bmp" multiple onChange={handleInputChange} className="hidden" />
               <div className="text-4xl mb-3">📄</div>
-              <p className="text-lg text-gray-600">拖拽 .docx 试卷或题目图片到此处，或点击选择（图片可多选）</p>
-              <p className="text-sm text-blue-500 mt-1">💡 截图后可连续按 Ctrl + V 粘贴多题，每张图=一道题</p>
+              <p className="text-lg text-gray-600">拖拽 .docx/.pptx 试卷或题目图片到此处，或点击选择（图片可多选）</p>
+              <p className="text-sm text-blue-500 mt-1">💡 支持 Ctrl + V 直接粘贴：Word/PPT 里复制的题目（文字+图）、截图（自动 OCR）</p>
               <p className="text-sm text-gray-400 mt-2">题目将自动归类到「{kpName}」</p>
             </div>
           )}
