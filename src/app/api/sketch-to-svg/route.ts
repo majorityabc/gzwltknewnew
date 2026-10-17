@@ -103,13 +103,25 @@ export async function POST(req: Request) {
       }
     } catch { /* 拉不到不阻塞 */ }
   }
-  // kimi k3 + glm-4.6v 赛跑：并行发，先出合法 SVG 的赢（时延 = 快者而非串行之和）
-  const racers: Promise<{ svg: string; via: string } | null>[] = [
+  // deepseek-flash（V4.1-Flash-1017，实测 0.3-0.4s）主力，kimi k3 / glm-4.6v 竞速兜底：
+  // 谁先返回合法 SVG 谁赢；全挂才报错
+  const racers: Promise<{ svg: string; via: string } | null>[] = [];
+  const dsKey = process.env.DEEPSEEK_API_KEY;
+  const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
+  const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
+  if (dsKey) {
+    racers.push(
+      genWith(dsBase, dsKey, dsModel, image, context)
+        .then((svg) => (svg ? { svg, via: dsModel } : null))
+        .catch(() => null),
+    );
+  }
+  racers.push(
     getKimiToken()
       .then((token) => genWith(process.env.KIMI_OCR_BASE || "https://api.kimi.com/coding/v1", token, process.env.KIMI_OCR_MODEL || "k3", image, context))
       .then((svg) => (svg ? { svg, via: `kimi-${process.env.KIMI_OCR_MODEL || "k3"}` } : null))
       .catch(() => null),
-  ];
+  );
   const zaiKey = process.env.ZAI_API_KEY;
   const zaiBase = process.env.ZAI_OCR_BASE || "https://api.z.ai/api/coding/paas/v4";
   const zaiModel = process.env.ZAI_OCR_MODEL || "glm-4.6v";
@@ -120,16 +132,11 @@ export async function POST(req: Request) {
         .catch(() => null),
     );
   }
-  const winner = (await Promise.all(racers)).find((r) => r);
+  // Promise.any 语义：第一个返回非 null 的赢（真竞速，不等慢者）
+  const winner = await Promise.any(
+    racers.map((p) => p.then((r) => (r ? r : Promise.reject(new Error("null"))))),
+  ).catch(() => null);
   if (winner) return NextResponse.json({ data: { svg: winner.svg, via: winner.via } });
 
-  // 全挂 → deepseek-flash 最后兜底
-  const dsKey = process.env.DEEPSEEK_API_KEY;
-  const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
-  const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
-  if (dsKey) {
-    const svg = await genWith(dsBase, dsKey, dsModel, image, context);
-    if (svg) return NextResponse.json({ data: { svg, via: dsModel } });
-  }
   return NextResponse.json({ error: "转换失败，请重试或用原图" }, { status: 502 });
 }
