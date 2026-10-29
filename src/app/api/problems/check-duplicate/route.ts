@@ -42,6 +42,7 @@ export async function POST(request: NextRequest) {
           lessonTitle: problem.lessonTitle,
           questionType: problem.questionType,
           sourceDate: problem.sourceDate,
+          remarks: problem.remarks,
           knowledgePoints: problem.knowledgePoints.map((kp) => ({
             id: kp.knowledgePoint.id,
             name: kp.knowledgePoint.name,

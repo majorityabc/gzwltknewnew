@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
 
     const created = [];
     for (const item of body) {
-      const { content, difficulty, lessonTitle, questionType, sourceDate, knowledgePointIds, answer } = item;
+      const { content, difficulty, lessonTitle, questionType, sourceDate, knowledgePointIds, answer, remarks } = item;
 
       if (!content || !knowledgePointIds || knowledgePointIds.length === 0) {
         return NextResponse.json(
@@ -108,6 +108,7 @@ export async function POST(request: NextRequest) {
           lessonTitle: lessonTitle ?? null,
           questionType: questionType ?? null,
           sourceDate: sourceDate ?? null,
+          remarks: remarks ?? null,
           knowledgePoints: {
             create: (knowledgePointIds as number[]).map((kpId) => ({
               knowledgePointId: kpId,

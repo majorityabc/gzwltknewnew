@@ -216,12 +216,23 @@ export default function FigureReview({ paragraphs, onChange }: FigureReviewProps
     onChange(next);
   };
 
+  // 丢弃该图：从段落 runs 中移除这条图片（识别多裁的图、无关图直接删）
+  const discard = (pi: number, ri: number) => {
+    if (!window.confirm("确定丢弃这张图？丢弃后不可恢复")) return;
+    const next = paragraphs
+      .map((p, i) =>
+        i === pi ? { ...p, runs: (p.runs || []).filter((_, j) => j !== ri) } : p,
+      )
+      .filter((p) => (p.runs || []).length > 0 || (p.tableCells || []).some((c) => (c || []).length > 0));
+    onChange(next);
+  };
+
   return (
     <div className="bg-blue-50/60 border border-blue-200 rounded-xl p-4 mb-4">
       <h3 className="text-sm font-semibold text-gray-700 mb-1">
         🖼 示意图确认（{figures.length} 张）
       </h3>
-      <p className="text-xs text-gray-400 mb-3">已自动从原图裁剪；不满意可「✏️自己裁剪」微调，或「📋粘贴替换」直接贴入新图。</p>
+      <p className="text-xs text-gray-400 mb-3">已自动从原图裁剪；不满意可「✏️自己裁剪」微调，或「📋粘贴替换」直接贴入新图；多裁/无关的图点「🗑丢弃」移除。</p>
       <div className="space-y-3">
         {figures.map((f, idx) => {
           const chosenCrop = f.fig.cropSrc && f.src === f.fig.cropSrc;
@@ -262,6 +273,12 @@ export default function FigureReview({ paragraphs, onChange }: FigureReviewProps
                 }`}
               >
                 {pasteIdx === idx ? "⌨️ 现在按 Ctrl+V 粘贴…（再点取消）" : "📋 粘贴替换"}
+              </button>
+              <button
+                onClick={() => discard(f.pi, f.ri)}
+                className="px-3 py-1.5 border rounded-lg text-xs text-red-500 hover:bg-red-50 hover:border-red-200 transition-colors"
+              >
+                🗑 丢弃
               </button>
             </div>
           );

@@ -27,6 +27,7 @@ interface ExistingProblem {
   lessonTitle: string | null;
   questionType: string | null;
   sourceDate: string | null;
+  remarks: string | null;
   knowledgePoints: { id: number; name: string }[];
 }
 
@@ -39,6 +40,7 @@ interface ModalProblem {
   sourceDate: string;
   kept: boolean;
   answer: string;
+  remarks: string;
 }
 
 interface UploadModalProps {
@@ -452,6 +454,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
           sourceDate: todayStr(),
           kept: true,
           answer: "",
+          remarks: "",
         });
         current = [];
       }
@@ -466,6 +469,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
         sourceDate: todayStr(),
         kept: true,
         answer: "",
+        remarks: "",
       });
     }
     setProblems(result);
@@ -591,7 +595,8 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
           const sameDifficulty = existing.difficulty === p.difficulty;
           const sameType = (existing.questionType || "") === p.questionType;
           const sameDate = (existing.sourceDate || "") === p.sourceDate;
-          const allSame = sameTags && sameDifficulty && sameType && sameDate;
+          const sameRemarks = (existing.remarks || "") === p.remarks;
+          const allSame = sameTags && sameDifficulty && sameType && sameDate && sameRemarks;
 
           if (allSame) {
             skipped++;
@@ -606,6 +611,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
               difficulty: p.difficulty,
               questionType: p.questionType || null,
               sourceDate: p.sourceDate || null,
+              remarks: p.remarks || null,
               knowledgePointIds: kpIds,
             }),
           });
@@ -620,6 +626,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
               difficulty: p.difficulty,
               questionType: p.questionType || null,
               sourceDate: p.sourceDate || null,
+              remarks: p.remarks || null,
               knowledgePointIds: kpIds,
             }]),
           });
@@ -921,6 +928,17 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
                           </label>
                         ))}
                       </fieldset>
+                    </div>
+
+                    {/* 备注 */}
+                    <div className="mt-2">
+                      <input
+                        type="text"
+                        value={problem.remarks}
+                        onChange={(e) => updateProblem(problem.id, "remarks", e.target.value)}
+                        placeholder="备注（可选）：如易错点、出处、课堂提示……"
+                        className="w-full border rounded px-2 py-1.5 text-xs text-gray-700 placeholder-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                      />
                     </div>
                   </div>
                 </div>
