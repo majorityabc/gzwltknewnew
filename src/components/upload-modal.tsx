@@ -758,7 +758,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
                 </button>
               </div>
               <p className="text-sm text-gray-500 mb-4">
-                点击段落之间的 <span className="px-2 py-0.5 bg-yellow-200 rounded text-xs font-bold">分割线</span> 按钮来切分题目
+                点击段落之间的 <span className="px-2 py-0.5 bg-yellow-200 rounded text-xs font-bold">分割线</span> 按钮切分题目；多张图默认各自成题，若一道题跨了 2~3 张截图，点相邻图之间的红色「第 N 题开始」按钮即可取消分割、合并为同一题
               </p>
               <div className="space-y-0 bg-white border rounded-lg overflow-hidden">
                 {parsedDoc.paragraphs.map((para, i) => (
@@ -774,7 +774,7 @@ export function UploadModal({ open, onClose, textbookId, chapterId, chapterTitle
                           }`}
                         >
                           {splitIndices.has(i - 1)
-                            ? `第 ${[...splitIndices].filter((s) => s <= i - 1).length + 1} 题开始`
+                            ? `第 ${[...splitIndices].filter((s) => s <= i - 1).length + 1} 题开始（点此取消分割）`
                             : "在此分割"}
                         </button>
                       </div>
