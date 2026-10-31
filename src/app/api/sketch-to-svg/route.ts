@@ -1,26 +1,4 @@
 import { NextResponse } from "next/server";
-import { readFileSync } from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileP = promisify(execFile);
-
-/** Kimi Code OAuth token（15 分钟过期，用 CLI 代刷） */
-function readKimiCreds(): { access_token: string; expires_at?: number } {
-  const file = process.env.KIMI_CRED_FILE || "/root/.kimi-code/credentials/kimi-code.json";
-  return JSON.parse(readFileSync(file, "utf8"));
-}
-
-async function getKimiToken(force = false): Promise<string> {
-  const creds = readKimiCreds();
-  if (creds.expires_at && creds.expires_at - Date.now() / 1000 > 120 && !force) return creds.access_token;
-  try {
-    await execFileP(process.env.KIMI_CLI || "/root/.kimi-code/bin/kimi", ["-p", "hi"], { timeout: 150000 });
-  } catch (e) {
-    console.warn("[sketch-svg] kimi CLI refresh failed:", e instanceof Error ? e.message : e);
-  }
-  return readKimiCreds().access_token;
-}
 
 // POST /api/sketch-to-svg { image: dataURL } → { svg }
 // 手绘物理示意图 → 规范电子矢量图（glm-4.6v 主力，deepseek-flash 兜底）
@@ -103,40 +81,13 @@ export async function POST(req: Request) {
       }
     } catch { /* 拉不到不阻塞 */ }
   }
-  // deepseek-flash（V4.1-Flash-1017，实测 0.3-0.4s）主力，kimi k3 / glm-4.6v 竞速兜底：
-  // 谁先返回合法 SVG 谁赢；全挂才报错
-  const racers: Promise<{ svg: string; via: string } | null>[] = [];
+  // 只用 DeepSeek V4.1-Flash-1017（API 名 deepseek-flash，实测 0.3-0.4s）——按用户要求 2026-10-31 移除 kimi/zai 竞速
   const dsKey = process.env.DEEPSEEK_API_KEY;
   const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
   const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
-  if (dsKey) {
-    racers.push(
-      genWith(dsBase, dsKey, dsModel, image, context)
-        .then((svg) => (svg ? { svg, via: dsModel } : null))
-        .catch(() => null),
-    );
-  }
-  racers.push(
-    getKimiToken()
-      .then((token) => genWith(process.env.KIMI_OCR_BASE || "https://api.kimi.com/coding/v1", token, process.env.KIMI_OCR_MODEL || "k3", image, context))
-      .then((svg) => (svg ? { svg, via: `kimi-${process.env.KIMI_OCR_MODEL || "k3"}` } : null))
-      .catch(() => null),
-  );
-  const zaiKey = process.env.ZAI_API_KEY;
-  const zaiBase = process.env.ZAI_OCR_BASE || "https://api.z.ai/api/coding/paas/v4";
-  const zaiModel = process.env.ZAI_OCR_MODEL || "glm-4.6v";
-  if (zaiKey) {
-    racers.push(
-      genWith(zaiBase, zaiKey, zaiModel, image, context)
-        .then((svg) => (svg ? { svg, via: zaiModel } : null))
-        .catch(() => null),
-    );
-  }
-  // Promise.any 语义：第一个返回非 null 的赢（真竞速，不等慢者）
-  const winner = await Promise.any(
-    racers.map((p) => p.then((r) => (r ? r : Promise.reject(new Error("null"))))),
-  ).catch(() => null);
-  if (winner) return NextResponse.json({ data: { svg: winner.svg, via: winner.via } });
+  if (!dsKey) return NextResponse.json({ error: "未配置 DEEPSEEK_API_KEY" }, { status: 500 });
+  const svg = await genWith(dsBase, dsKey, dsModel, image, context).catch(() => null);
+  if (svg) return NextResponse.json({ data: { svg, via: dsModel } });
 
   return NextResponse.json({ error: "转换失败，请重试或用原图" }, { status: 502 });
 }
