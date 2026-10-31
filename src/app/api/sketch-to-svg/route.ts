@@ -43,7 +43,7 @@ async function genWith(base: string, key: string, model: string, image: string, 
         messages: [
           { role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: image } }] },
         ],
-        max_tokens: 4000,
+        max_tokens: 16384,  // deepseek-flash 是思考型模型：思考过程也吃 token 预算，4000 会全被思考烧光导致正文为空
         // kimi k3 只允许 temperature=1，其他模型用 0.2 求稳
         ...(model === (process.env.KIMI_OCR_MODEL || "k3") ? {} : { temperature: 0.2 }),
       }),

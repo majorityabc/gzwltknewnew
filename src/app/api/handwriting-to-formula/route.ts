@@ -56,7 +56,7 @@ async function ocrWith(base: string, key: string, model: string, image: string):
             ],
           },
         ],
-        max_tokens: 2500,
+        max_tokens: 8192,  // 思考型模型：思考吃 token 预算，留足空间防止正文为空
         temperature: 0,
         // 关闭思考链：OCR 是直出任务，思考反而经常烧光 token 导致正文为空
         thinking: { type: "disabled" },
