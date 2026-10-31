@@ -60,7 +60,7 @@ wss.on("connection", async (ws, req) => {
   broadcast(room, room.editors, padStatus(room));
   if (role === "editor" && room.queue.length) {
     // 只补投 30 分钟内的，过期的丢弃
-    const fresh = room.queue.filter((m) => Date.now() - (m._qAt || 0) < 30 * 60 * 1000);
+    const fresh = room.queue.filter((m) => Date.now() - (m._qAt || 0) < 24 * 60 * 60 * 1000);
     if (fresh.length) {
       ws.send(JSON.stringify({ kind: "offline-notice", count: fresh.length }));
       for (const msg of fresh) { const { _qAt, ...clean } = msg; ws.send(JSON.stringify(clean)); }
@@ -82,13 +82,17 @@ wss.on("connection", async (ws, req) => {
       if (role !== "pad") return; // 只有 pad 能产出内容
       const out = JSON.stringify(msg);
       if (room.editors.size) broadcast(room, room.editors, out);
-      else if (room.queue.length < 50) room.queue.push({ ...msg, _qAt: Date.now() });
+      else if (room.queue.length < 50) {
+        room.queue.push({ ...msg, _qAt: Date.now() });
+        // 回执 pad：已暂存（pad 凭此告诉用户"打开电脑端自动补投"，而不是傻等 ack）
+        if (msg.id) { try { ws.send(JSON.stringify({ kind: "queued", id: msg.id })); } catch { /* noop */ } }
+      }
     } else if (msg.kind === "ping") {
       // 应用层心跳（防 CF 掐断空闲连接）：收到即回 pong，双向流量保活
       try { ws.send(JSON.stringify({ kind: "pong" })); } catch { /* noop */ }
     } else if (msg.kind === "ack") {
-      // pad 确认收到 → 转发给编辑器（用于重发机制）
-      broadcast(room, room.editors, JSON.stringify(msg));
+      // ack 双向中继：pad→editor（编辑请求回执）或 editor→pad（内容插入回执）
+      broadcast(room, role === "pad" ? room.editors : room.pads, JSON.stringify(msg));
     } else if (msg.kind === "edit-image" || msg.kind === "edit-formula") {
       if (role !== "editor") return; // 只有编辑器能发图给 pad
       if (room.pads.size) broadcast(room, room.pads, JSON.stringify(msg));
