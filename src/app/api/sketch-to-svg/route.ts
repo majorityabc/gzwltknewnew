@@ -1,22 +1,30 @@
 import { NextResponse } from "next/server";
+import crypto from "node:crypto";
 
-// POST /api/sketch-to-svg { image: dataURL } → { svg }
-// 手绘物理示意图 → 规范电子矢量图（glm-4.6v 主力，deepseek-flash 兜底）
+// POST /api/sketch-to-svg { image: dataURL } → { jobId }；GET ?jobId= → { status, svg? }
+// 手绘物理示意图 → 规范电子矢量图（只用 deepseek-flash，V4.1-Flash-1017）
+// 2026-11-01 改版：两轮对话复刻 DeepSeek 桌面版工作流（先理解图像→再基于理解画图），
+// 质量显著优于单轮直接逼模型出 SVG。两轮可能超过 Cloudflare 100s 代理超时 → 改 job 轮询。
 
-const PROMPT = `这是一张手绘的物理示意图（可能是电路图、受力分析图、光路图、运动示意图等）。
-请理解图中的物理内容，生成一张规范的 SVG 矢量图。
+const ANALYZE_PROMPT = `这是一张手绘的物理示意图（可能是电路图、受力分析图、光路图、运动示意图等）。
+第一步：请仔细观察并详细描述这张图——
+1. 图的类型（电路图/受力图/光路图/运动图……）
+2. 每个元件/物体/符号是什么，分别在画面什么位置（上下左右、相对关系）
+3. 所有文字标注（中文、字母、数字、上下标），分别对应哪个元件
+4. 连线/箭头怎么走；如果是电路，闭合回路的绕行顺序
+只输出描述，不要画 SVG。`;
 
+const SVG_PROMPT = `第二步：根据你的描述，把这张手绘图重画成规范的 SVG 电子图。
 要求：
 1. 白色背景，黑色线条（stroke="#111111"，stroke-width=2）
 2. 电路图用中国国标符号：电阻用矩形（不是锯齿），电源用长短线对，开关、灯泡（圆圈内×）、电流表（圆圈内A）、电压表（圆圈内V）、滑动变阻器等；导线横平竖直
 3. 受力图：物体用方块或圆，力用带箭头线段，标注力符号（如 F、G、N、f）
-4. 图中的文字标注保留（中文、字母、数字、上下标），用 font-family="sans-serif" font-size="18"
+4. 所有文字标注保留（中文、字母、数字、上下标），font-family="sans-serif" font-size="18"
 5. 必须带 width 和 height 属性（建议 600~900 宽，按内容比例），viewBox 与之一致
 6. 线条对齐网格，元件均匀分布，整体比手绘稿规整
-7. 只输出 SVG 代码本身：不要 markdown 代码块、不要任何解释文字
-8. 不要使用 <script>、<foreignObject>、外部引用
-9. 关键：图中所有元件一个都不能丢。特别注意——回路中若出现一长一短两条平行线（无论横竖），那是电池/电源，必须画成标准电池符号（长细线+短粗线对）；手绘再潦草也要按「这是一个完整电路」去理解
-10. 输出紧凑：不要空行、不要注释，直接给最小化 SVG。`;
+7. 只输出 SVG 代码本身：不要 markdown 代码块、不要解释文字；不要使用 <script>、<foreignObject>、外部引用
+8. 你第一步描述到的元件一个都不能丢；一长一短两条平行线（无论横竖）是电池/电源，画成标准电池符号（长细线+短粗线对）
+9. 输出紧凑：不要空行、不要注释。`;
 
 function extractSvg(text: string): string | null {
   const t = text.replace(/^```(?:svg|xml)?\s*/i, "").replace(/```\s*$/, "").trim();
@@ -30,38 +38,68 @@ function extractSvg(text: string): string | null {
   return svg;
 }
 
-async function genWith(base: string, key: string, model: string, image: string, context: string): Promise<string | null> {
-  try {
-    const prompt = context
-      ? `${PROMPT}\n\n【讲义上下文】用户正在编辑的讲义内容如下，画图主题很可能与之相关，识别时请参考：\n${context}`
-      : PROMPT;
-    const res = await fetch(`${base}/chat/completions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: image } }] },
-        ],
-        max_tokens: 16384,  // deepseek-flash 是思考型模型：思考过程也吃 token 预算，4000 会全被思考烧光导致正文为空
-        // kimi k3 只允许 temperature=1，其他模型用 0.2 求稳
-        ...(model === (process.env.KIMI_OCR_MODEL || "k3") ? {} : { temperature: 0.2 }),
-      }),
-      signal: AbortSignal.timeout(90000),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      console.warn(`[sketch-svg] ${model} HTTP ${res.status}: ${body.slice(0, 160)}`);
-      return null;
-    }
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const svg = extractSvg(data.choices?.[0]?.message?.content || "");
-    if (!svg) console.warn(`[sketch-svg] ${model} 输出不含合法 SVG`);
-    return svg;
-  } catch (e) {
-    console.warn(`[sketch-svg] ${model} 异常:`, e instanceof Error ? e.message : e);
+interface Msg { role: string; content: unknown }
+
+async function chat(base: string, key: string, model: string, messages: Msg[], maxTokens: number): Promise<string | null> {
+  // 思考型模型：max_tokens 要同时容纳思考+正文，给足
+  const res = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages, max_tokens: maxTokens }),  // temperature 用模型默认（对齐桌面版表现）
+    signal: AbortSignal.timeout(150000),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.warn(`[sketch-svg] ${model} HTTP ${res.status}: ${body.slice(0, 160)}`);
     return null;
   }
+  const data = (await res.json()) as { choices?: { message?: { content?: string }; finish_reason?: string }[] };
+  const ch = data.choices?.[0];
+  if (ch?.finish_reason === "length") console.warn(`[sketch-svg] ${model} 输出被截断（finish=length）`);
+  return ch?.message?.content || null;
+}
+
+/** 两轮对话：先理解后画图（复刻桌面版"识别很准→再生成"的链路） */
+async function genTwoTurn(base: string, key: string, model: string, image: string, context: string): Promise<string | null> {
+  // 轮1：理解图像
+  const analysis = await chat(base, key, model, [
+    { role: "user", content: [{ type: "text", text: ANALYZE_PROMPT }, { type: "image_url", image_url: { url: image } }] },
+  ], 8192).catch((e) => { console.warn(`[sketch-svg] 轮1异常:`, e instanceof Error ? e.message : e); return null; });
+  if (!analysis) { console.warn("[sketch-svg] 轮1（图像理解）失败"); return null; }
+  console.log(`[sketch-svg] 轮1理解完成（${analysis.length}字符）`);
+
+  // 轮2：基于理解画 SVG（讲义上下文在这轮给，帮助选材/聚焦）
+  const svgPrompt = context
+    ? `${SVG_PROMPT}\n\n【讲义上下文】用户正在编辑的讲义内容如下，画图主题很可能与之相关，请参考：\n${context}`
+    : SVG_PROMPT;
+  const out = await chat(base, key, model, [
+    { role: "user", content: [{ type: "text", text: ANALYZE_PROMPT }, { type: "image_url", image_url: { url: image } }] },
+    { role: "assistant", content: analysis },
+    { role: "user", content: svgPrompt },
+  ], 16384).catch((e) => { console.warn(`[sketch-svg] 轮2异常:`, e instanceof Error ? e.message : e); return null; });
+  if (!out) { console.warn("[sketch-svg] 轮2（生成SVG）失败"); return null; }
+  const svg = extractSvg(out);
+  if (!svg) console.warn(`[sketch-svg] 轮2输出不含合法 SVG（${out.length}字符）`);
+  return svg;
+}
+
+// ---- job 化（两轮可能 >100s，绕 Cloudflare 代理超时）----
+type Job = { status: "processing" | "done" | "error"; svg?: string; error?: string; via?: string; createdAt: number };
+const jobs = new Map<string, Job>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, j] of jobs) if (now - j.createdAt > 30 * 60 * 1000) jobs.delete(id);
+}, 5 * 60 * 1000).unref();
+
+async function runJob(jobId: string, image: string, context: string) {
+  const job = jobs.get(jobId)!;
+  const dsKey = process.env.DEEPSEEK_API_KEY;
+  const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
+  const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
+  if (!dsKey) { job.status = "error"; job.error = "未配置 DEEPSEEK_API_KEY"; return; }
+  const svg = await genTwoTurn(dsBase, dsKey, dsModel, image, context).catch(() => null);
+  if (svg) { job.status = "done"; job.svg = svg; job.via = `${dsModel}-twoTurn`; }
+  else { job.status = "error"; job.error = "转换失败，请重试或用原图"; }
 }
 
 export async function POST(req: Request) {
@@ -81,13 +119,18 @@ export async function POST(req: Request) {
       }
     } catch { /* 拉不到不阻塞 */ }
   }
-  // 只用 DeepSeek V4.1-Flash-1017（API 名 deepseek-flash，实测 0.3-0.4s）——按用户要求 2026-10-31 移除 kimi/zai 竞速
-  const dsKey = process.env.DEEPSEEK_API_KEY;
-  const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
-  const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
-  if (!dsKey) return NextResponse.json({ error: "未配置 DEEPSEEK_API_KEY" }, { status: 500 });
-  const svg = await genWith(dsBase, dsKey, dsModel, image, context).catch(() => null);
-  if (svg) return NextResponse.json({ data: { svg, via: dsModel } });
+  const jobId = crypto.randomUUID();
+  jobs.set(jobId, { status: "processing", createdAt: Date.now() });
+  void runJob(jobId, image, context);
+  return NextResponse.json({ data: { jobId } });
+}
 
-  return NextResponse.json({ error: "转换失败，请重试或用原图" }, { status: 502 });
+export async function GET(req: Request) {
+  const jobId = new URL(req.url).searchParams.get("jobId");
+  if (!jobId) return NextResponse.json({ error: "缺少 jobId" }, { status: 400 });
+  const job = jobs.get(jobId);
+  if (!job) return NextResponse.json({ error: "job 不存在或已过期" }, { status: 404 });
+  if (job.status === "processing") return NextResponse.json({ data: { status: "processing" } });
+  if (job.status === "error") return NextResponse.json({ error: job.error || "转换失败" }, { status: 502 });
+  return NextResponse.json({ data: { status: "done", svg: job.svg, via: job.via } });
 }
