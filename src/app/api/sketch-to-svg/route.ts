@@ -59,8 +59,8 @@ async function chat(base: string, key: string, model: string, messages: Msg[], m
   return ch?.message?.content || null;
 }
 
-/** 两轮对话：先理解后画图（复刻桌面版"识别很准→再生成"的链路） */
-async function genTwoTurn(base: string, key: string, model: string, image: string, context: string): Promise<string | null> {
+/** 两轮对话：先理解后画图（复刻桌面版"识别很准→再生成"的链路）。返回 svg + 完整对话（微调轮要续上） */
+async function genTwoTurn(base: string, key: string, model: string, image: string, context: string): Promise<{ svg: string; messages: Msg[] } | null> {
   // 轮1：理解图像
   const analysis = await chat(base, key, model, [
     { role: "user", content: [{ type: "text", text: ANALYZE_PROMPT }, { type: "image_url", image_url: { url: image } }] },
@@ -72,19 +72,21 @@ async function genTwoTurn(base: string, key: string, model: string, image: strin
   const svgPrompt = context
     ? `${SVG_PROMPT}\n\n【讲义上下文】用户正在编辑的讲义内容如下，画图主题很可能与之相关，请参考：\n${context}`
     : SVG_PROMPT;
-  const out = await chat(base, key, model, [
+  const msgs: Msg[] = [
     { role: "user", content: [{ type: "text", text: ANALYZE_PROMPT }, { type: "image_url", image_url: { url: image } }] },
     { role: "assistant", content: analysis },
     { role: "user", content: svgPrompt },
-  ], 16384).catch((e) => { console.warn(`[sketch-svg] 轮2异常:`, e instanceof Error ? e.message : e); return null; });
+  ];
+  const out = await chat(base, key, model, msgs, 16384).catch((e) => { console.warn(`[sketch-svg] 轮2异常:`, e instanceof Error ? e.message : e); return null; });
   if (!out) { console.warn("[sketch-svg] 轮2（生成SVG）失败"); return null; }
   const svg = extractSvg(out);
-  if (!svg) console.warn(`[sketch-svg] 轮2输出不含合法 SVG（${out.length}字符）`);
-  return svg;
+  if (!svg) { console.warn(`[sketch-svg] 轮2输出不含合法 SVG（${out.length}字符）`); return null; }
+  msgs.push({ role: "assistant", content: out });
+  return { svg, messages: msgs };
 }
 
 // ---- job 化（两轮可能 >100s，绕 Cloudflare 代理超时）----
-type Job = { status: "processing" | "done" | "error"; svg?: string; error?: string; via?: string; createdAt: number };
+type Job = { status: "processing" | "done" | "error"; svg?: string; error?: string; via?: string; createdAt: number; messages?: Msg[] };
 const jobs = new Map<string, Job>();
 setInterval(() => {
   const now = Date.now();
@@ -97,13 +99,47 @@ async function runJob(jobId: string, image: string, context: string) {
   const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
   const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
   if (!dsKey) { job.status = "error"; job.error = "未配置 DEEPSEEK_API_KEY"; return; }
-  const svg = await genTwoTurn(dsBase, dsKey, dsModel, image, context).catch(() => null);
-  if (svg) { job.status = "done"; job.svg = svg; job.via = `${dsModel}-twoTurn`; }
+  const r = await genTwoTurn(dsBase, dsKey, dsModel, image, context).catch(() => null);
+  if (r) { job.status = "done"; job.svg = r.svg; job.messages = r.messages; job.via = `${dsModel}-twoTurn`; }
   else { job.status = "error"; job.error = "转换失败，请重试或用原图"; }
 }
 
+/** 微调轮：在既有对话（原图+分析+SVG）上追加用户意见，重画 */
+async function runRefineJob(jobId: string, baseMessages: Msg[], feedback: string) {
+  const job = jobs.get(jobId)!;
+  const dsKey = process.env.DEEPSEEK_API_KEY;
+  const dsBase = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
+  const dsModel = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
+  if (!dsKey) { job.status = "error"; job.error = "未配置 DEEPSEEK_API_KEY"; return; }
+  const msgs: Msg[] = [
+    ...baseMessages,
+    { role: "user", content: `修改要求：${feedback}
+请按此修改（其余保持不变），直接输出修改后的完整 SVG（格式要求同前）。` },
+  ];
+  const out = await chat(dsBase, dsKey, dsModel, msgs, 16384).catch((e) => { console.warn(`[sketch-svg] 微调异常:`, e instanceof Error ? e.message : e); return null; });
+  const svg = out ? extractSvg(out) : null;
+  if (svg) {
+    msgs.push({ role: "assistant", content: out! });
+    job.status = "done"; job.svg = svg; job.messages = msgs; job.via = `${dsModel}-refine`;
+  } else {
+    job.status = "error"; job.error = "修改失败，请重试";
+  }
+}
+
 export async function POST(req: Request) {
-  const { image, docId } = await req.json();
+  const body = await req.json();
+  // 微调模式：{ jobId: 上一次任务的 id, feedback: "修改意见" }
+  if (body.feedback && body.jobId) {
+    const base = jobs.get(String(body.jobId));
+    if (!base || base.status !== "done" || !base.messages) {
+      return NextResponse.json({ error: "原任务不存在或已过期，请重新「转电子图」" }, { status: 404 });
+    }
+    const jobId = crypto.randomUUID();
+    jobs.set(jobId, { status: "processing", createdAt: Date.now() });
+    void runRefineJob(jobId, base.messages, String(body.feedback).slice(0, 300));
+    return NextResponse.json({ data: { jobId } });
+  }
+  const { image, docId } = body;
   if (typeof image !== "string" || !image.startsWith("data:image/")) {
     return NextResponse.json({ error: "缺 image（dataURL）" }, { status: 400 });
   }
