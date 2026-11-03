@@ -407,6 +407,15 @@ export function PaperLibrary() {
                   {copiedId === p.id ? "✓ 链接已复制" : "分享"}
                 </button>
                 <a
+                  href={`/tiku/api/papers/${p.id}/preview`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-1.5 border rounded text-sm text-blue-600 hover:bg-blue-50"
+                  title={p.fileType === "docx" ? "浏览器里直接打开（首次打开需服务器转换几秒）" : "浏览器里直接打开"}
+                >
+                  打开
+                </a>
+                <a
                   href={`/tiku/api/papers/${p.id}/download`}
                   className="px-3 py-1.5 border rounded text-sm text-gray-600 hover:bg-gray-50"
                 >
