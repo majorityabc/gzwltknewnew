@@ -250,8 +250,47 @@ export function PaperLibrary() {
     window.location.href = `/tiku/upload?fromPaper=${p.id}`;
   };
 
+  const sideItem = (active: boolean) =>
+    `w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm mb-0.5 transition-colors ${
+      active ? "bg-blue-500 text-white" : "text-gray-600 hover:bg-gray-100"
+    }`;
+
   return (
-    <div className="p-4 h-full overflow-y-auto">
+    <div className="flex h-full">
+      {/* 左侧目录栏（目录多了纵向滚动，不挤内容区） */}
+      <div className="w-44 flex-shrink-0 border-r bg-gray-50/60 p-3 overflow-y-auto">
+        <div className="flex items-center justify-between mb-2 px-1">
+          <span className="text-xs font-medium text-gray-400">目录</span>
+          <button onClick={handleAddFolder} className="text-blue-500 hover:text-blue-600 text-base leading-none" title="新建目录">＋</button>
+        </div>
+        <button onClick={() => setFilterFolder("")} className={sideItem(filterFolder === "")}>
+          <span>📁 全部</span>
+        </button>
+        <button onClick={() => setFilterFolder("none")} className={sideItem(filterFolder === "none")}>
+          <span>📂 未分类</span>
+        </button>
+        {folders.length > 0 && <div className="border-t my-2" />}
+        {folders.map((f) => (
+          <div key={f.id} className="group relative">
+            <button onClick={() => setFilterFolder(String(f.id))} className={sideItem(filterFolder === String(f.id)) + (filterFolder === String(f.id) ? " pr-12" : "")}>
+              <span className="truncate">📁 {f.name}</span>
+              <span className={`text-xs ml-1 ${filterFolder === String(f.id) ? "text-blue-100" : "text-gray-400"}`}>{f._count.papers}</span>
+            </button>
+            {filterFolder === String(f.id) && (
+              <span className="absolute right-8 top-1/2 -translate-y-1/2 flex gap-0.5">
+                <button onClick={() => handleRenameFolder(f)} className="text-xs text-blue-100 hover:text-white" title="改名">✏️</button>
+                <button onClick={() => handleDeleteFolder(f)} className="text-xs text-blue-100 hover:text-white" title="删除目录（试卷移回未分类）">🗑</button>
+              </span>
+            )}
+          </div>
+        ))}
+        <button onClick={handleAddFolder} className="w-full mt-2 px-3 py-2 rounded-lg text-sm border border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500">
+          ＋ 新建目录
+        </button>
+      </div>
+
+      {/* 右侧内容区 */}
+      <div className="flex-1 p-4 overflow-y-auto min-w-0">
       {/* 工具栏 */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <h2 className="text-lg font-semibold text-gray-700">📄 试卷库</h2>
@@ -288,38 +327,6 @@ export function PaperLibrary() {
           className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm font-medium"
         >
           ＋ 上传试卷
-        </button>
-      </div>
-
-      {/* 目录栏 */}
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <span className="text-xs text-gray-400">目录：</span>
-        {[
-          { key: "", label: "全部" },
-          { key: "none", label: "未分类" },
-          ...folders.map((f) => ({ key: String(f.id), label: `${f.name}（${f._count.papers}）`, folder: f })),
-        ].map((it) => (
-          <span key={it.key || "all"} className="inline-flex items-center">
-            <button
-              onClick={() => setFilterFolder(it.key)}
-              className={`px-3 py-1 rounded-full text-sm border transition-colors ${
-                filterFolder === it.key
-                  ? "bg-blue-500 text-white border-blue-500"
-                  : "bg-white text-gray-600 border-gray-200 hover:border-blue-300"
-              }`}
-            >
-              {it.label}
-            </button>
-            {"folder" in it && it.folder && filterFolder === it.key && (
-              <>
-                <button onClick={() => handleRenameFolder(it.folder!)} className="ml-1 text-xs text-gray-400 hover:text-blue-500" title="改名">✏️</button>
-                <button onClick={() => handleDeleteFolder(it.folder!)} className="text-xs text-gray-400 hover:text-red-500" title="删除目录（试卷移回未分类）">🗑</button>
-              </>
-            )}
-          </span>
-        ))}
-        <button onClick={handleAddFolder} className="px-2.5 py-1 rounded-full text-sm border border-dashed border-gray-300 text-gray-500 hover:border-blue-400 hover:text-blue-500">
-          ＋ 新建目录
         </button>
       </div>
 
@@ -596,6 +603,7 @@ export function PaperLibrary() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
