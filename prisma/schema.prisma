@@ -107,6 +107,8 @@ model Paper {
   fileData   String // base64 文件本体
   textbookId Int?
   textbook   Textbook? @relation(fields: [textbookId], references: [id])
+  folderId   Int?
+  folder     PaperFolder? @relation(fields: [folderId], references: [id])
   shareToken String?   @unique // 公开分享暗号，凭此可免登录下载
   createdAt  DateTime  @default(now())
 }
@@ -119,4 +121,11 @@ model Lecture {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("lectures")
+}
+
+model PaperFolder {
+  id        Int      @id @default(autoincrement())
+  name      String
+  createdAt DateTime @default(now())
+  papers    Paper[]
 }

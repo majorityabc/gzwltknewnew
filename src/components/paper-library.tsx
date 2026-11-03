@@ -4,6 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 /** 试卷库：整卷存档（Word / PDF），支持上传、下载、编辑、删除、Word 拆题入库 */
 
+interface FolderItem {
+  id: number;
+  name: string;
+  _count: { papers: number };
+}
+
 interface PaperItem {
   id: number;
   title: string;
@@ -14,6 +20,7 @@ interface PaperItem {
   fileType: "docx" | "pdf";
   downloadCount: number;
   textbookId: number | null;
+  folderId: number | null;
   textbook: { name: string } | null;
   createdAt: string;
 }
@@ -35,6 +42,10 @@ export function PaperLibrary() {
   const [textbooks, setTextbooks] = useState<TextbookItem[]>([]);
   const [filterType, setFilterType] = useState("");
   const [filterTextbook, setFilterTextbook] = useState("");
+  const [folders, setFolders] = useState<FolderItem[]>([]);
+  const [filterFolder, setFilterFolder] = useState("");  // ""=全部 "none"=未分类 数字串=指定目录
+  const [uploadFolder, setUploadFolder] = useState("");
+  const [editFolder, setEditFolder] = useState("");
   const [loading, setLoading] = useState(false);
 
   // 上传弹窗
@@ -90,6 +101,7 @@ export function PaperLibrary() {
       const params = new URLSearchParams();
       if (filterType) params.set("paperType", filterType);
       if (filterTextbook) params.set("textbookId", filterTextbook);
+      if (filterFolder) params.set("folderId", filterFolder);
       const res = await fetch(`/tiku/api/papers?${params.toString()}`);
       const data = await res.json();
       if (data.data) setPapers(data.data);
@@ -98,7 +110,7 @@ export function PaperLibrary() {
     } finally {
       setLoading(false);
     }
-  }, [filterType, filterTextbook]);
+  }, [filterType, filterTextbook, filterFolder]);
 
   useEffect(() => {
     loadPapers();
@@ -110,6 +122,52 @@ export function PaperLibrary() {
       .then((d) => setTextbooks(d.data || []))
       .catch(() => {});
   }, []);
+
+  const loadFolders = useCallback(() => {
+    fetch("/tiku/api/paper-folders")
+      .then((r) => r.json())
+      .then((d) => setFolders(d.data || []))
+      .catch(() => {});
+  }, []);
+  useEffect(() => { loadFolders(); }, [loadFolders]);
+
+  const handleAddFolder = async () => {
+    const name = window.prompt("新目录名称：", "");
+    if (!name || !name.trim()) return;
+    const res = await fetch("/tiku/api/paper-folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) return alert(d.error || "创建失败");
+    loadFolders();
+  };
+
+  const handleRenameFolder = async (f: FolderItem) => {
+    const name = window.prompt("目录改名：", f.name);
+    if (!name || !name.trim() || name.trim() === f.name) return;
+    const res = await fetch("/tiku/api/paper-folders", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: f.id, name: name.trim() }),
+    });
+    if (!res.ok) return alert("改名失败");
+    loadFolders();
+  };
+
+  const handleDeleteFolder = async (f: FolderItem) => {
+    if (!confirm(`删除目录「${f.name}」？里面的 ${f._count.papers} 份试卷会移回「未分类」，不会被删除。`)) return;
+    const res = await fetch("/tiku/api/paper-folders", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: f.id }),
+    });
+    if (!res.ok) return alert("删除失败");
+    if (filterFolder === String(f.id)) setFilterFolder("");
+    loadFolders();
+    loadPapers();
+  };
 
   const resetUpload = () => {
     setFile(null);
@@ -129,6 +187,7 @@ export function PaperLibrary() {
       fd.append("title", title);
       fd.append("paperType", paperType);
       fd.append("textbookId", textbookId);
+      fd.append("folderId", uploadFolder);
       fd.append("remarks", remarks);
       const res = await fetch("/tiku/api/papers", { method: "POST", body: fd });
       const data = await res.json();
@@ -158,6 +217,7 @@ export function PaperLibrary() {
     setEditTitle(p.title);
     setEditType(p.paperType);
     setEditTextbook(p.textbookId ? String(p.textbookId) : "");
+    setEditFolder(p.folderId ? String(p.folderId) : "");
     setEditRemarks(p.remarks || "");
   };
 
@@ -172,6 +232,7 @@ export function PaperLibrary() {
           title: editTitle,
           paperType: editType,
           textbookId: editTextbook || null,
+          folderId: editFolder || null,
           remarks: editRemarks,
         }),
       });
@@ -223,10 +284,42 @@ export function PaperLibrary() {
           📷 拍照转 Word
         </a>
         <button
-          onClick={() => setUploadOpen(true)}
+          onClick={() => { setUploadFolder(filterFolder && filterFolder !== "none" ? filterFolder : ""); setUploadOpen(true); }}
           className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm font-medium"
         >
           ＋ 上传试卷
+        </button>
+      </div>
+
+      {/* 目录栏 */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
+        <span className="text-xs text-gray-400">目录：</span>
+        {[
+          { key: "", label: "全部" },
+          { key: "none", label: "未分类" },
+          ...folders.map((f) => ({ key: String(f.id), label: `${f.name}（${f._count.papers}）`, folder: f })),
+        ].map((it) => (
+          <span key={it.key || "all"} className="inline-flex items-center">
+            <button
+              onClick={() => setFilterFolder(it.key)}
+              className={`px-3 py-1 rounded-full text-sm border transition-colors ${
+                filterFolder === it.key
+                  ? "bg-blue-500 text-white border-blue-500"
+                  : "bg-white text-gray-600 border-gray-200 hover:border-blue-300"
+              }`}
+            >
+              {it.label}
+            </button>
+            {"folder" in it && it.folder && filterFolder === it.key && (
+              <>
+                <button onClick={() => handleRenameFolder(it.folder!)} className="ml-1 text-xs text-gray-400 hover:text-blue-500" title="改名">✏️</button>
+                <button onClick={() => handleDeleteFolder(it.folder!)} className="text-xs text-gray-400 hover:text-red-500" title="删除目录（试卷移回未分类）">🗑</button>
+              </>
+            )}
+          </span>
+        ))}
+        <button onClick={handleAddFolder} className="px-2.5 py-1 rounded-full text-sm border border-dashed border-gray-300 text-gray-500 hover:border-blue-400 hover:text-blue-500">
+          ＋ 新建目录
         </button>
       </div>
 
@@ -384,6 +477,19 @@ export function PaperLibrary() {
                     ))}
                   </select>
                 </div>
+                <div className="flex-1">
+                  <label className="text-sm text-gray-600">存入目录</label>
+                  <select
+                    value={uploadFolder}
+                    onChange={(e) => setUploadFolder(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg mt-1 text-sm bg-white"
+                  >
+                    <option value="">未分类</option>
+                    {folders.map((f) => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div>
                 <label className="text-sm text-gray-600">备注（可选）</label>
@@ -449,6 +555,19 @@ export function PaperLibrary() {
                     <option value="">不关联</option>
                     {textbooks.map((t) => (
                       <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="text-sm text-gray-600">目录</label>
+                  <select
+                    value={editFolder}
+                    onChange={(e) => setEditFolder(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg mt-1 text-sm bg-white"
+                  >
+                    <option value="">未分类</option>
+                    {folders.map((f) => (
+                      <option key={f.id} value={f.id}>{f.name}</option>
                     ))}
                   </select>
                 </div>

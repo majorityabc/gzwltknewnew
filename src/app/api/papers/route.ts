@@ -10,11 +10,13 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const paperType = searchParams.get("paperType");
     const textbookId = searchParams.get("textbookId");
+    const folderId = searchParams.get("folderId");  // "none"=未分类，数字=指定目录，缺省=全部
 
     const papers = await db.paper.findMany({
       where: {
         ...(paperType ? { paperType } : {}),
         ...(textbookId ? { textbookId: Number(textbookId) } : {}),
+        ...(folderId === "none" ? { folderId: null } : folderId ? { folderId: Number(folderId) } : {}),
       },
       select: {
         id: true,
@@ -26,6 +28,7 @@ export async function GET(request: NextRequest) {
         fileType: true,
         downloadCount: true,
         textbookId: true,
+        folderId: true,
         textbook: { select: { name: true } },
         createdAt: true,
       },
@@ -88,6 +91,8 @@ export async function POST(request: NextRequest) {
     const paperType = PAPER_TYPES.includes(paperTypeRaw) ? paperTypeRaw : "其他";
     const textbookIdRaw = String(formData.get("textbookId") || "");
     const textbookId = textbookIdRaw ? Number(textbookIdRaw) : null;
+    const folderIdRaw = String(formData.get("folderId") || "");
+    const folderId = folderIdRaw ? Number(folderIdRaw) : null;
     const remarks = String(formData.get("remarks") || "").trim() || null;
 
     const fileData = Buffer.from(await file.arrayBuffer()).toString("base64");
@@ -102,6 +107,7 @@ export async function POST(request: NextRequest) {
         fileType: isPdf ? "pdf" : "docx",
         fileData,
         ...(textbookId ? { textbookId } : {}),
+        ...(folderId ? { folderId } : {}),
       },
       select: { id: true },
     });

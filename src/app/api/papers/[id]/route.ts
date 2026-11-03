@@ -17,11 +17,13 @@ export async function PATCH(
       paperType?: string;
       remarks?: string | null;
       textbookId?: number | null;
+      folderId?: number | null;
     } = {};
     if (typeof body.title === "string" && body.title.trim()) data.title = body.title.trim().slice(0, 120);
     if (typeof body.paperType === "string" && PAPER_TYPES.includes(body.paperType)) data.paperType = body.paperType;
     if (body.remarks !== undefined) data.remarks = String(body.remarks).trim() || null;
     if (body.textbookId !== undefined) data.textbookId = body.textbookId ? Number(body.textbookId) : null;
+    if (body.folderId !== undefined) data.folderId = body.folderId ? Number(body.folderId) : null;
 
     await db.paper.update({ where: { id: Number(id) }, data });
     return NextResponse.json({ ok: true });
