@@ -250,6 +250,33 @@ export function PaperLibrary() {
     window.location.href = `/tiku/upload?fromPaper=${p.id}`;
   };
 
+  // 侧栏宽度可拖（120~480px），记住用户习惯
+  const [sideW, setSideW] = useState(176);
+  useEffect(() => {
+    const saved = Number(localStorage.getItem("paperLib.sideW"));
+    if (saved >= 120 && saved <= 480) setSideW(saved);
+  }, []);
+  const sideDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const onSideDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    sideDragRef.current = { startX: e.clientX, startW: sideW };
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    const onMove = (ev: PointerEvent) => {
+      const d = sideDragRef.current;
+      if (!d) return;
+      setSideW(Math.min(480, Math.max(120, d.startW + ev.clientX - d.startX)));
+    };
+    const onUp = () => {
+      el.removeEventListener("pointermove", onMove);
+      sideDragRef.current = null;
+      setSideW((w) => { localStorage.setItem("paperLib.sideW", String(w)); return w; });
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp, { once: true });
+    el.addEventListener("pointercancel", onUp, { once: true });
+  };
+
   const sideItem = (active: boolean) =>
     `w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm mb-0.5 transition-colors ${
       active ? "bg-blue-500 text-white" : "text-gray-600 hover:bg-gray-100"
@@ -258,7 +285,7 @@ export function PaperLibrary() {
   return (
     <div className="flex h-full">
       {/* 左侧目录栏（目录多了纵向滚动，不挤内容区） */}
-      <div className="w-44 flex-shrink-0 border-r bg-gray-50/60 p-3 overflow-y-auto">
+      <div style={{ width: sideW }} className="flex-shrink-0 bg-gray-50/60 p-3 overflow-y-auto">
         <div className="flex items-center justify-between mb-2 px-1">
           <span className="text-xs font-medium text-gray-400">目录</span>
           <button onClick={handleAddFolder} className="text-blue-500 hover:text-blue-600 text-base leading-none" title="新建目录">＋</button>
@@ -289,8 +316,16 @@ export function PaperLibrary() {
         </button>
       </div>
 
+      {/* 分隔拖拽条：左右拖动调侧栏宽度 */}
+      <div
+        onPointerDown={onSideDragStart}
+        style={{ touchAction: "none" }}
+        className="w-1.5 flex-shrink-0 cursor-col-resize bg-gray-200 hover:bg-blue-300 active:bg-blue-400 transition-colors"
+        title="拖动调整目录栏宽度"
+      />
+
       {/* 右侧内容区 */}
-      <div className="flex-1 p-4 overflow-y-auto min-w-0">
+      <div className="flex-1 p-4 overflow-y-auto min-w-0 border-l">
       {/* 工具栏 */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
         <h2 className="text-lg font-semibold text-gray-700">📄 试卷库</h2>
