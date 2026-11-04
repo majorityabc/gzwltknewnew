@@ -193,8 +193,9 @@ async function callKimi(messages: unknown[], maxTokens: number): Promise<string>
  *  svg  —— 示意图与文字交织无法裁剪时，模型直接用 SVG 重绘
  */
 const FIGURE_PROMPT = `你负责处理试卷图片里的示意图。图片上叠加了红色网格与 0-1000 坐标刻度（列标签在顶部、行标签在左侧），请对照网格读出准确坐标。对图中的每个示意图（不含纯文字段落）输出一个处理方案，只输出一个 JSON 对象，格式：
-{"figures":[{"mode":"crop","box":[x1,y1,x2,y2]},{"mode":"svg","svg":"<svg ...>...</svg>"}]}
+{"figures":[{"mode":"crop","box":[x1,y1,x2,y2],"q":3},{"mode":"svg","svg":"<svg ...>...</svg>","q":5}]}
 规则：
+0. 【题号关联】每个示意图都要输出 "q"：它所属题目的题号（印在题干开头的阿拉伯数字，如 "3." 就是 3）。图通常在所属题目的文字附近；看图上离它最近的题干编号。实在判断不出就省略 q 字段，不要乱猜。
 1. 【最重要】公式不是示意图！任何数学表达式（含分式、根号、上下标、希腊字母的式子，无论独占一行还是嵌入文字中）都绝不要框选，它们已由另一路识别成 LaTeX。你只处理真正的「图」：电路图、受力分析图、光路图、运动示意图、坐标图像、实验装置图、几何图形。
 2. 优先用 crop：示意图能被一个矩形框完整框住、且矩形内基本没有混入正文文字时，用 crop。box 坐标归一化到 0-1000，框要稍大于图形本身（留白 2%），确保完整。
 3. 当示意图与文字紧密交织、任何矩形都会裁进大量文字时，用 svg 重绘：用简洁的白底黑线物理示意图风格（线宽 2-3，viewBox="0 0 800 400"，必要文字标注用 <text>），还原原图的物理要素（如测速仪、汽车、声波弧线、方向箭头等）。
@@ -255,8 +256,8 @@ async function callKimiFigure(dataUrl: string): Promise<string> {
 async function collectFigureItems(
   buffer: Buffer,
   content: string,
-): Promise<{ ref?: string; svg?: string; box?: number[] }[]> {
-  let specs: { mode?: string; box?: number[]; svg?: string }[] = [];
+): Promise<{ ref?: string; svg?: string; box?: number[]; q?: number }[]> {
+  let specs: { mode?: string; box?: number[]; svg?: string; q?: number }[] = [];
   const start = content.indexOf("{");
   const end = content.lastIndexOf("}");
   if (start > -1 && end > start) {
@@ -289,7 +290,7 @@ async function collectFigureItems(
   const W = meta.width || 0;
   const H = meta.height || 0;
 
-  const items: { ref?: string; svg?: string; box?: number[] }[] = [];
+  const items: { ref?: string; svg?: string; box?: number[]; q?: number }[] = [];
 
   const invalidN = specs.filter((sp) => !(Array.isArray(sp.box) && sp.box.length === 4 && sp.box.every((v) => Number.isFinite(v))) && sp.mode !== "svg").length;
   if (invalidN > 0) console.warn(`[figure] ${invalidN} 个 spec 缺少合法 box`);
@@ -324,7 +325,7 @@ async function collectFigureItems(
         /* trim 失败就用原裁剪 */
       }
       const cropped = await pipe.png().toBuffer();
-      items.push({ ref: `data:image/png;base64,${cropped.toString("base64")}`, box: sp.box });
+      items.push({ ref: `data:image/png;base64,${cropped.toString("base64")}`, box: sp.box, ...(typeof sp.q === "number" ? { q: sp.q } : {}) });
     } catch (e) {
       console.warn("[figure] crop failed:", e);
     }
@@ -334,7 +335,7 @@ async function collectFigureItems(
   for (const sp of specs) {
     if (sp.mode === "svg" && sp.svg && sp.svg.trim().startsWith("<svg") && sp.svg.trim().endsWith("</svg>")) {
       const svg = sp.svg.replace(/<script[\s\S]*?<\/script>/gi, "");
-      items.push({ svg });
+      items.push({ svg, ...(typeof sp.q === "number" ? { q: sp.q } : {}) });
     } else if (sp.mode === "svg") {
       svgBad++;
     }
@@ -469,38 +470,74 @@ async function runOcrJob(job: OcrJob, file: File) {
         const M = items.length;
         // 纯裁剪模式（2026-09-20 起移除 AI 重画：慢、效果一般、费 token）
         // 每张图直接取原图裁剪版；用户可在前端「✏️自己裁剪」微调或「📋粘贴替换」
-        const finals: ({ src: string; meta?: { box?: number[]; cropSrc?: string } } | null)[] = items.map((it) =>
+        const finals: ({ src: string; q?: number; meta?: { box?: number[]; cropSrc?: string } } | null)[] = items.map((it) =>
           it.ref
-            ? { src: it.ref, meta: { ...(it.box ? { box: it.box } : {}), cropSrc: it.ref } }
+            ? { src: it.ref, ...(typeof it.q === "number" ? { q: it.q } : {}), meta: { ...(it.box ? { box: it.box } : {}), cropSrc: it.ref } }
             : null,
         );
         console.log(`[figure] 共 ${M} 张，裁剪成功 ${finals.filter(Boolean).length} 张`);
         job.stage = "裁剪示意图";
         job.progress = 90;
-        const figures = finals.filter(Boolean) as { src: string; meta?: { box?: number[]; cropSrc?: string } }[];
+        const figures = finals.filter(Boolean) as { src: string; q?: number; meta?: { box?: number[]; cropSrc?: string } }[];
         const droppedCount = M - figures.length;
         if (droppedCount > 0) {
           job.warnings = job.warnings || [];
           job.warnings.push(`⚠️ ${droppedCount} 张示意图无法自动框选，已在对应位置放入原图——点「✏️自己裁剪」补全。`);
         }
-        let fi = 0;
+        // 占位符所属题号：向前找最近的 "N." 题号段
+        const questionNoAt = (pi: number): number | null => {
+          for (let i = pi; i >= 0; i--) {
+            const t = (normalized.paragraphs[i].runs || []).map((r) => r.text || "").join("").trim();
+            const m = t.match(/^(\d{1,2})\s*[.、．]/);
+            if (m) return parseInt(m[1]);
+          }
+          return null;
+        };
+        // 图按题号分桶（同题多图保持上下顺序）；题号缺失的只能走顺序兜底
+        const byQ = new Map<number, number[]>();
+        figures.forEach((f, i) => {
+          if (typeof f.q === "number") {
+            const arr = byQ.get(f.q) || [];
+            arr.push(i);
+            byQ.set(f.q, arr);
+          }
+        });
+        const withQ = figures.filter((f) => typeof f.q === "number").length;
+        console.log(`[figure] ${figures.length} 张图中 ${withQ} 张带题号关联`);
+        const usedF = new Set<number>();
+        const takeFigure = (qn: number | null): number => {
+          // 优先：同题号桶里取（该题自己的图，错位也不连环）
+          if (qn != null) {
+            const bucket = byQ.get(qn);
+            if (bucket) {
+              const i = bucket.find((x) => !usedF.has(x));
+              if (i !== undefined) { usedF.add(i); return i; }
+            }
+          }
+          // 兜底：全局顺序取第一张未用的（保持旧行为）
+          const i = figures.findIndex((_, x) => !usedF.has(x));
+          if (i >= 0) usedF.add(i);
+          return i;
+        };
+        let filledByCrop = 0;
         let placedViaPlaceholder = false;
         const placeholderCount = normalized.paragraphs.reduce(
           (n, p) =>
             n + (p.runs || []).filter((r) => (r.text || "").includes("【图")).length,
           0,
         );
-        for (const p of normalized.paragraphs) {
+        normalized.paragraphs.forEach((p, pi) => {
           const idx = p.runs?.findIndex((r) => r.text?.includes("【图"));
-          if (idx === undefined || idx < 0) continue;
-          if (fi < figures.length) {
+          if (idx === undefined || idx < 0) return;
+          const pick = takeFigure(questionNoAt(pi));
+          if (pick >= 0) {
             // 用图片 run 替换【图N】占位符（导出的 Word 更干净）
             (p.runs as unknown as { type: string; src: string; fig?: object }[]).splice(idx, 1, {
               type: "image",
-              src: figures[fi].src,
-              ...(figures[fi].meta ? { fig: figures[fi].meta } : {}),
+              src: figures[pick].src,
+              ...(figures[pick].meta ? { fig: figures[pick].meta } : {}),
             } as unknown as { type: string; src: string; fig?: object });
-            fi++;
+            filledByCrop++;
             placedViaPlaceholder = true;
           } else {
             // 图不够用：塞入原图作为占位，前端「示意图确认」里可手动裁剪出正确的图
@@ -510,8 +547,8 @@ async function runOcrJob(job: OcrJob, file: File) {
               fig: { cropSrc: dataUrl },
             } as unknown as { type: string; src: string; fig?: object });
           }
-        }
-        const unplaced = placeholderCount - fi;
+        });
+        const unplaced = placeholderCount - filledByCrop;
         if (unplaced > 0) {
           job.warnings = job.warnings || [];
           job.warnings.push(
@@ -520,8 +557,18 @@ async function runOcrJob(job: OcrJob, file: File) {
         }
         // 兜底：占位符没放完的剩余图，按顺序插到最后一张已放图后面；
         // 一张都没放过则插到"如图"那段后面（找不到放第 1 段后）——绝不丢图
-        if (figures.length > fi) {
-          const rest = figures.slice(fi);
+        const rest = figures.filter((_, i) => !usedF.has(i));
+        // 剩余图按题号各归其位：找到该题题号段，插到题干后面；同题多图依次往后排
+        const nextPosByQ = new Map<number, number>();
+        const qInsertPos = (qn: number): number | null => {
+          if (nextPosByQ.has(qn)) return nextPosByQ.get(qn)!;
+          const qi = normalized.paragraphs.findIndex((pp) => {
+            const t = (pp.runs || []).map((r) => r.text || "").join("").trim();
+            return new RegExp("^" + qn + "\\s*[.、．]").test(t);
+          });
+          return qi >= 0 ? qi + 1 : null;
+        };
+        if (rest.length > 0) {
           let insertAt = -1;
           for (let i = normalized.paragraphs.length - 1; i >= 0; i--) {
             const hasImg = (normalized.paragraphs[i].runs || []).some(
@@ -542,10 +589,19 @@ async function runOcrJob(job: OcrJob, file: File) {
             }
           }
           for (const f of rest) {
-            normalized.paragraphs.splice(insertAt, 0, {
+            let at = insertAt;
+            if (typeof f.q === "number") {
+              const pos = qInsertPos(f.q);
+              if (pos != null) {
+                at = pos;
+                nextPosByQ.set(f.q, pos + 1);  // 同题下一张往后挪
+                if (at >= insertAt) insertAt = at + 1;  // 兜底游标保持前进
+              }
+            }
+            normalized.paragraphs.splice(at, 0, {
               runs: [{ type: "image", src: f.src, ...(f.meta ? { fig: f.meta } : {}) } as unknown as OcrRun],
             });
-            insertAt++;
+            if (at === insertAt) insertAt++;
           }
           if (!placedViaPlaceholder) {
             job.warnings = job.warnings || [];
