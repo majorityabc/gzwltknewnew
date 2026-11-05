@@ -36,6 +36,11 @@ export function KnowledgePointList({
   const [showDropdown, setShowDropdown] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  // 合并知识点：源标签 → 目标标签
+  const [mergeSource, setMergeSource] = useState<KnowledgePoint | null>(null);
+  const [mergeQuery, setMergeQuery] = useState("");
+  const [mergeResults, setMergeResults] = useState<KnowledgePoint[]>([]);
+  const [merging, setMerging] = useState(false);
   const [addingKp, setAddingKp] = useState(false);
   const [newKpName, setNewKpName] = useState("");
   const [savingKp, setSavingKp] = useState(false);
@@ -56,6 +61,42 @@ export function KnowledgePointList({
   }, [chapterId]);
 
   useEffect(() => { loadChapterKps(); }, [loadChapterKps]);
+
+  const searchMergeTargets = useCallback(async (q: string, sourceId: number) => {
+    setMergeQuery(q);
+    if (!q.trim()) { setMergeResults([]); return; }
+    try {
+      const r = await fetch(`/tiku/api/knowledge-points?search=${encodeURIComponent(q.trim())}`);
+      const d = await r.json();
+      setMergeResults((d.data || []).filter((k: KnowledgePoint) => k.id !== sourceId));
+    } catch { setMergeResults([]); }
+  }, []);
+
+  const handleMerge = useCallback(async (target: KnowledgePoint) => {
+    if (!mergeSource) return;
+    const srcCount = mergeSource._count?.problems ?? 0;
+    if (!window.confirm(`把「${mergeSource.name}」的 ${srcCount} 道题并入「${target.name}」？\n合并后「${mergeSource.name}」标签将被删除，不可恢复。`)) return;
+    setMerging(true);
+    try {
+      const r = await fetch("/tiku/api/knowledge-points/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceId: mergeSource.id, targetId: target.id }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "合并失败");
+      alert(`✓ 已合并：${d.data.moved} 道题移入「${d.data.target.name}」`);
+      if (selectedKpId === mergeSource.id) onSelectKnowledgePoint(target.id, target.name);
+      setMergeSource(null);
+      setMergeQuery("");
+      setMergeResults([]);
+      loadChapterKps();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "合并失败");
+    } finally {
+      setMerging(false);
+    }
+  }, [mergeSource, selectedKpId, onSelectKnowledgePoint, loadChapterKps]);
 
   const startEdit = useCallback(async (kp: KnowledgePoint) => {
     setEditingKpId(kp.id);
@@ -342,6 +383,13 @@ export function KnowledgePointList({
                 )}
               </button>
               <button
+                onClick={(e) => { e.stopPropagation(); setMergeSource(kp); setMergeQuery(""); setMergeResults([]); }}
+                className="px-1.5 py-1 text-gray-300 hover:text-purple-500 hover:bg-purple-50 rounded text-xs transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
+                title="合并到其他知识点（题目全部搬走，本标签删除）"
+              >
+                ⇄
+              </button>
+              <button
                 onClick={(e) => { e.stopPropagation(); startEdit(kp); }}
                 className="px-1.5 py-1 text-gray-300 hover:text-blue-500 hover:bg-blue-50 rounded text-xs transition-colors flex-shrink-0 opacity-0 group-hover:opacity-100"
                 title="改名 / 移动到其他章节"
@@ -360,6 +408,49 @@ export function KnowledgePointList({
           );
         })}
       </div>
+
+      {/* 合并知识点弹窗 */}
+      {mergeSource && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setMergeSource(null)}>
+          <div className="bg-white rounded-xl p-5 w-[420px] max-w-[92vw]" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-gray-800 mb-1">合并知识点</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              把「<span className="text-purple-600 font-medium">{mergeSource.name}</span>」（{mergeSource._count?.problems ?? 0} 题）并入另一个知识点，源标签删除。
+            </p>
+            <input
+              type="text"
+              value={mergeQuery}
+              onChange={(e) => searchMergeTargets(e.target.value, mergeSource.id)}
+              placeholder="搜索目标知识点…"
+              className="w-full border rounded-lg px-3 py-2 text-sm mb-2"
+              autoFocus
+            />
+            <div className="max-h-60 overflow-y-auto border rounded-lg">
+              {mergeResults.length === 0 ? (
+                <p className="text-xs text-gray-400 p-3 text-center">{mergeQuery.trim() ? "没有匹配的知识点" : "输入关键词搜索目标"}</p>
+              ) : (
+                mergeResults.map((kp) => (
+                  <button
+                    key={kp.id}
+                    onClick={() => handleMerge(kp)}
+                    disabled={merging}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-purple-50 border-b last:border-b-0 disabled:opacity-50"
+                  >
+                    <span className="text-gray-800">{kp.name}</span>
+                    {kp._count && <span className="ml-1.5 text-[10px] text-gray-400 bg-gray-100 rounded-full px-1.5 py-0.5">{kp._count.problems}题</span>}
+                    {kp.chapter && <span className="block text-[11px] text-gray-400 mt-0.5">{kp.chapter.title}</span>}
+                  </button>
+                ))
+              )}
+            </div>
+            <div className="flex justify-end mt-3">
+              <button onClick={() => setMergeSource(null)} className="px-4 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50">
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
