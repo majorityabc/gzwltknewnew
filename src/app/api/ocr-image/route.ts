@@ -296,7 +296,14 @@ async function collectFigureItems(
   if (invalidN > 0) console.warn(`[figure] ${invalidN} 个 spec 缺少合法 box`);
   const boxed = specs
     .filter((sp) => Array.isArray(sp.box) && sp.box.length === 4 && sp.box.every((v) => Number.isFinite(v)))
-    .map((sp) => ({ ...sp, box: sp.box!.map(Number) }))
+    .map((sp) => {
+      // 模型偶尔会给出反向/越界坐标（x1>x2、超出0-1000）→ 纠正+夹取，不再直接报废
+      let [x1, y1, x2, y2] = sp.box!.map(Number);
+      if (x1 > x2) [x1, x2] = [x2, x1];
+      if (y1 > y2) [y1, y2] = [y2, y1];
+      const cl = (v: number) => Math.min(1000, Math.max(0, v));
+      return { ...sp, box: [cl(x1), cl(y1), cl(x2), cl(y2)] };
+    })
     .filter((sp) => {
       const [x1, y1, x2, y2] = sp.box!;
       const w = ((x2 - x1) / 1000) * W;
