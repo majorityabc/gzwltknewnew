@@ -456,9 +456,6 @@ export function PaperLibrary() {
             </div>
           );
         })}
-        <button onClick={handleAddFolder} className="w-full mt-2 px-3 py-2 rounded-lg text-sm border border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500">
-          ＋ 新建目录
-        </button>
       </div>
 
       {/* 分隔拖拽条：左右拖动调侧栏宽度 */}
