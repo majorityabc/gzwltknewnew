@@ -65,27 +65,8 @@ export async function POST(request: NextRequest) {
     }
 
     let title = String(formData.get("title") || "").trim();
-    if (!title && isDocx) {
-      // 自动提取 Word 第一段非空文字作为标题
-      try {
-        const buffer = Buffer.from(await file.arrayBuffer());
-        const { parseDocx } = await import("@/lib/docx-parser");
-        const doc = await parseDocx(buffer);
-        for (const para of doc.paragraphs) {
-          const text = para.runs
-            .map((r) => r.type === "text" ? r.text : "")
-            .join("")
-            .trim();
-          if (text) {
-            title = text.slice(0, 80);
-            break;
-          }
-        }
-      } catch {
-        // 提取失败不阻断上传
-      }
-    }
     if (!title) {
+      // 统一用原文件名（去扩展名）作为标题，不从文档内容提取
       title = file.name.replace(/\.(docx|pdf)$/i, "").slice(0, 80) || "未命名试卷";
     }
 

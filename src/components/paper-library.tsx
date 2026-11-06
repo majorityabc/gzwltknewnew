@@ -609,7 +609,7 @@ export function PaperLibrary() {
                 <p className="text-xs text-gray-400">多文件上传时各按文件名自动命名</p>
               ) : (
                 <div>
-                  <label className="text-sm text-gray-600">标题（留空自动提取）</label>
+                  <label className="text-sm text-gray-600">标题（留空用原文件名）</label>
                   <input
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
