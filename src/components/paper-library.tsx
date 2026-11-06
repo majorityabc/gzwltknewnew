@@ -19,6 +19,8 @@ interface PaperItem {
   fileSize: number;
   fileType: "docx" | "pdf";
   downloadCount: number;
+  lecturesPaperId: number | null;
+  lecturesSentAt: string | null;
   textbookId: number | null;
   folderId: number | null;
   textbook: { name: string } | null;
@@ -70,6 +72,30 @@ export function PaperLibrary() {
 
   // 分享：刚复制成功的试卷 id（用于按钮短暂变色提示）
   const [copiedId, setCopiedId] = useState<number | null>(null);
+
+  // 发送到讲题页：正在发送中的试卷 id
+  const [sendingId, setSendingId] = useState<number | null>(null);
+
+  const handleSendToLectures = async (p: PaperItem) => {
+    setSendingId(p.id);
+    try {
+      const res = await fetch(`/tiku/api/papers/${p.id}/send-to-lectures`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "发送到讲题页失败");
+      const lecturesPaperId = data.data.lecturesPaperId as number;
+      setPapers((cur) =>
+        cur.map((it) =>
+          it.id === p.id
+            ? { ...it, lecturesPaperId, lecturesSentAt: new Date().toISOString() }
+            : it,
+        ),
+      );
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "发送到讲题页失败");
+    } finally {
+      setSendingId(null);
+    }
+  };
 
   const handleShare = async (p: PaperItem) => {
     try {
@@ -428,6 +454,26 @@ export function PaperLibrary() {
                     title="跳转到上传分割页，把这份卷子拆成一道道题目入库"
                   >
                     拆题入库
+                  </button>
+                )}
+                {p.lecturesPaperId ? (
+                  <a
+                    href={`/lectures/papers/${p.lecturesPaperId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3 py-1.5 border rounded text-sm text-green-600 border-green-300 hover:bg-green-50"
+                    title="已发送到讲义站，点击打开涂画讲题页"
+                  >
+                    已送讲题页 · 打开
+                  </a>
+                ) : (
+                  <button
+                    onClick={() => handleSendToLectures(p)}
+                    disabled={sendingId === p.id}
+                    className="px-3 py-1.5 border rounded text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                    title="把试卷原文件推给讲义站，涂画试卷页即可打开讲解"
+                  >
+                    {sendingId === p.id ? "发送中…" : "➡ 送讲题页"}
                   </button>
                 )}
                 <button

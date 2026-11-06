@@ -27,6 +27,8 @@ export async function GET(request: NextRequest) {
         fileSize: true,
         fileType: true,
         downloadCount: true,
+        lecturesPaperId: true,
+        lecturesSentAt: true,
         textbookId: true,
         folderId: true,
         textbook: { select: { name: true } },

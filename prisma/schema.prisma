@@ -110,6 +110,8 @@ model Paper {
   folderId   Int?
   folder     PaperFolder? @relation(fields: [folderId], references: [id])
   shareToken String?   @unique // 公开分享暗号，凭此可免登录下载
+  lecturesPaperId Int?     // 已发送到讲义站的试卷 id
+  lecturesSentAt  DateTime? // 发送时间
   createdAt  DateTime  @default(now())
 }
 
