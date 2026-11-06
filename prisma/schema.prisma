@@ -126,8 +126,11 @@ model Lecture {
 }
 
 model PaperFolder {
-  id        Int      @id @default(autoincrement())
+  id        Int           @id @default(autoincrement())
   name      String
-  createdAt DateTime @default(now())
+  parentId  Int?
+  parent    PaperFolder?  @relation("FolderTree", fields: [parentId], references: [id])
+  children  PaperFolder[] @relation("FolderTree")
+  createdAt DateTime      @default(now())
   papers    Paper[]
 }

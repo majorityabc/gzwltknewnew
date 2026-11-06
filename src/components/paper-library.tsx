@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 interface FolderItem {
   id: number;
   name: string;
+  parentId: number | null;
   _count: { papers: number };
 }
 
@@ -178,6 +179,19 @@ export function PaperLibrary() {
     loadFolders();
   };
 
+  const handleAddSubFolder = async (parent: FolderItem) => {
+    const name = window.prompt(`在「${parent.name}」下新建子目录：`, "");
+    if (!name || !name.trim()) return;
+    const res = await fetch("/tiku/api/paper-folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim(), parentId: parent.id }),
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) return alert(d.error || "创建失败");
+    loadFolders();
+  };
+
   const handleRenameFolder = async (f: FolderItem) => {
     const name = window.prompt("目录改名：", f.name);
     if (!name || !name.trim() || name.trim() === f.name) return;
@@ -191,7 +205,9 @@ export function PaperLibrary() {
   };
 
   const handleDeleteFolder = async (f: FolderItem) => {
-    if (!confirm(`删除目录「${f.name}」？里面的 ${f._count.papers} 份试卷会移回「未分类」，不会被删除。`)) return;
+    const kids = folders.filter((c) => c.parentId === f.id);
+    const extra = kids.length > 0 ? `，其 ${kids.length} 个子目录会提升为一级目录（子目录内试卷不动）` : "";
+    if (!confirm(`删除目录「${f.name}」？里面的 ${f._count.papers} 份试卷会移回「未分类」${extra}，不会被删除。`)) return;
     const res = await fetch("/tiku/api/paper-folders", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -352,6 +368,33 @@ export function PaperLibrary() {
       active ? "bg-blue-500 text-white" : "text-gray-600 hover:bg-gray-100"
     }`;
 
+  // 两级目录树：一级 parentId 为 null，二级挂在一级下
+  const topFolders = folders.filter((f) => f.parentId == null);
+  const childFolders = (pid: number) => folders.filter((f) => f.parentId === pid);
+
+  // 折叠状态（默认展开），localStorage 记住
+  const [collapsedIds, setCollapsedIds] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("paperLib.foldsCollapsed") || "[]");
+      if (Array.isArray(saved)) setCollapsedIds(new Set(saved.map(Number)));
+    } catch { /* ignore */ }
+  }, []);
+  const toggleCollapsed = (id: number) => {
+    setCollapsedIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      localStorage.setItem("paperLib.foldsCollapsed", JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  // 「存入目录」下拉：按树展开，二级目录加全角缩进前缀
+  const folderOptions = topFolders.flatMap((f) => [
+    { id: f.id, label: f.name },
+    ...childFolders(f.id).map((c) => ({ id: c.id, label: `　├ ${c.name}` })),
+  ]);
+
   return (
     <div className="flex h-full">
       {/* 左侧目录栏（目录多了纵向滚动，不挤内容区） */}
@@ -367,20 +410,52 @@ export function PaperLibrary() {
           <span>📂 未分类</span>
         </button>
         {folders.length > 0 && <div className="border-t my-2" />}
-        {folders.map((f) => (
-          <div key={f.id} className="group relative">
-            <button onClick={() => setFilterFolder(String(f.id))} className={sideItem(filterFolder === String(f.id)) + (filterFolder === String(f.id) ? " pr-12" : "")}>
-              <span className="truncate">📁 {f.name}</span>
-              <span className={`text-xs ml-1 ${filterFolder === String(f.id) ? "text-blue-100" : "text-gray-400"}`}>{f._count.papers}</span>
-            </button>
-            {filterFolder === String(f.id) && (
-              <span className="absolute right-8 top-1/2 -translate-y-1/2 flex gap-0.5">
-                <button onClick={() => handleRenameFolder(f)} className="text-xs text-blue-100 hover:text-white" title="改名">✏️</button>
-                <button onClick={() => handleDeleteFolder(f)} className="text-xs text-blue-100 hover:text-white" title="删除目录（试卷移回未分类）">🗑</button>
-              </span>
-            )}
-          </div>
-        ))}
+        {topFolders.map((f) => {
+          const kids = childFolders(f.id);
+          const active = filterFolder === String(f.id);
+          const collapsed = collapsedIds.has(f.id);
+          const iconCls = active ? "text-blue-100 hover:text-white" : "text-gray-400 hover:text-gray-600";
+          return (
+            <div key={f.id}>
+              <div className="group relative">
+                <button onClick={() => setFilterFolder(String(f.id))} className={sideItem(active) + (active ? " pr-16" : " group-hover:pr-16")}>
+                  <span className="truncate">
+                    {kids.length > 0 && (
+                      <span
+                        onClick={(e) => { e.stopPropagation(); toggleCollapsed(f.id); }}
+                        className="inline-block w-4 text-center cursor-pointer select-none"
+                        title={collapsed ? "展开子目录" : "折叠子目录"}
+                      >{collapsed ? "▸" : "▾"}</span>
+                    )}
+                    📁 {f.name}
+                  </span>
+                  <span className={`text-xs ml-1 ${active ? "text-blue-100" : "text-gray-400"}`}>{f._count.papers}</span>
+                </button>
+                <span className={`absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 ${active ? "" : "opacity-0 group-hover:opacity-100"}`}>
+                  <button onClick={() => handleAddSubFolder(f)} className={`text-xs ${iconCls}`} title="新建子目录">＋</button>
+                  <button onClick={() => handleRenameFolder(f)} className={`text-xs ${iconCls}`} title="改名">✏️</button>
+                  <button onClick={() => handleDeleteFolder(f)} className={`text-xs ${iconCls}`} title="删除目录（试卷移回未分类，子目录提升为一级）">🗑</button>
+                </span>
+              </div>
+              {!collapsed && kids.map((c) => {
+                const cActive = filterFolder === String(c.id);
+                const cIconCls = cActive ? "text-blue-100 hover:text-white" : "text-gray-400 hover:text-gray-600";
+                return (
+                  <div key={c.id} className="group relative pl-4">
+                    <button onClick={() => setFilterFolder(String(c.id))} className={sideItem(cActive) + (cActive ? " pr-12" : " group-hover:pr-12")}>
+                      <span className="truncate">📂 {c.name}</span>
+                      <span className={`text-xs ml-1 ${cActive ? "text-blue-100" : "text-gray-400"}`}>{c._count.papers}</span>
+                    </button>
+                    <span className={`absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 ${cActive ? "" : "opacity-0 group-hover:opacity-100"}`}>
+                      <button onClick={() => handleRenameFolder(c)} className={`text-xs ${cIconCls}`} title="改名">✏️</button>
+                      <button onClick={() => handleDeleteFolder(c)} className={`text-xs ${cIconCls}`} title="删除目录（试卷移回未分类）">🗑</button>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
         <button onClick={handleAddFolder} className="w-full mt-2 px-3 py-2 rounded-lg text-sm border border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-500">
           ＋ 新建目录
         </button>
@@ -652,8 +727,8 @@ export function PaperLibrary() {
                     className="w-full px-3 py-2 border rounded-lg mt-1 text-sm bg-white"
                   >
                     <option value="">未分类</option>
-                    {folders.map((f) => (
-                      <option key={f.id} value={f.id}>{f.name}</option>
+                    {folderOptions.map((f) => (
+                      <option key={f.id} value={f.id}>{f.label}</option>
                     ))}
                   </select>
                 </div>
@@ -746,8 +821,8 @@ export function PaperLibrary() {
                     className="w-full px-3 py-2 border rounded-lg mt-1 text-sm bg-white"
                   >
                     <option value="">未分类</option>
-                    {folders.map((f) => (
-                      <option key={f.id} value={f.id}>{f.name}</option>
+                    {folderOptions.map((f) => (
+                      <option key={f.id} value={f.id}>{f.label}</option>
                     ))}
                   </select>
                 </div>
