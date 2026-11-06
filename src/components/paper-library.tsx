@@ -495,7 +495,7 @@ export function PaperLibrary() {
         <a
           href="/tiku/snapshot"
           className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium"
-          title="拍照/截图识别后直接导出 Word，不入库"
+          title="给试卷拍照/截图，AI 识别后转成 Word 下载（只做转换，不存入题库）"
         >
           📷 拍照转 Word
         </a>
