@@ -11,6 +11,27 @@ const execFileP = promisify(execFile);
 
 const CACHE_DIR = "/root/gzwltknewnew/.cache/preview";
 
+/**
+ * .docx → PDF 走 pandoc + xelatex（soffice 会丢 OMML 公式里的字母数字）：
+ * pandoc 产 tex → fix_math_symbols.py 折叠数学字母数字符号 → xelatex 编译。
+ */
+async function docxToPdfPandoc(tmpDir: string, src: string): Promise<string> {
+  const texPath = path.join(tmpDir, "tmp.tex");
+  await execFileP("pandoc", [
+    src, "-s", "-o", texPath,
+    `--extract-media=${tmpDir}`, // 抽出嵌入图片，tex 里相对路径 media/... 依赖 xelatex 的 cwd=tmpDir
+    "-V", "CJKmainfont=Noto Serif CJK SC",
+    "-V", "mainfont=Liberation Serif",
+    "-V", "geometry:margin=2cm",
+  ], { timeout: 120000 });
+  await execFileP("python3", ["/root/scripts/fix_math_symbols.py", texPath], { timeout: 120000 });
+  // nonstopmode 下有小错误也可能非零退出，以产物为准
+  await execFileP("xelatex", ["-interaction=nonstopmode", texPath], { timeout: 120000, cwd: tmpDir }).catch(() => {});
+  const pdfPath = path.join(tmpDir, "tmp.pdf");
+  if (!fs.existsSync(pdfPath) || fs.statSync(pdfPath).size < 500) throw new Error("xelatex 未产出 PDF");
+  return pdfPath;
+}
+
 async function docxToPdf(id: number, docxBuf: Buffer): Promise<Buffer | null> {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
   const cached = path.join(CACHE_DIR, `${id}.pdf`);
@@ -20,13 +41,21 @@ async function docxToPdf(id: number, docxBuf: Buffer): Promise<Buffer | null> {
   try {
     const src = path.join(tmpDir, "src.docx");
     fs.writeFileSync(src, docxBuf);
-    // 独立 UserInstallation 避免并发 profile 锁；注意 soffice 失败时退出码也可能为 0 → 必须查产物
-    await execFileP("soffice", [
-      "--headless", "--norestore",
-      `-env:UserInstallation=file://${tmpDir}/lo-profile`,
-      "--convert-to", "pdf", "--outdir", tmpDir, src,
-    ], { timeout: 90000 });
-    const out = path.join(tmpDir, "src.pdf");
+    let out: string | null = null;
+    try {
+      out = await docxToPdfPandoc(tmpDir, src);
+    } catch (e) {
+      console.error(`[paper-preview] pandoc 转换失败 id=${id}，回退 soffice:`, e instanceof Error ? e.message : e);
+    }
+    if (!out) {
+      // 独立 UserInstallation 避免并发 profile 锁；注意 soffice 失败时退出码也可能为 0 → 必须查产物
+      await execFileP("soffice", [
+        "--headless", "--norestore",
+        `-env:UserInstallation=file://${tmpDir}/lo-profile`,
+        "--convert-to", "pdf", "--outdir", tmpDir, src,
+      ], { timeout: 120000 });
+      out = path.join(tmpDir, "src.pdf");
+    }
     if (!fs.existsSync(out) || fs.statSync(out).size < 500) return null;
     const pdf = fs.readFileSync(out);
     fs.writeFileSync(cached, pdf);
