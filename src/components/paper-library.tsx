@@ -32,6 +32,12 @@ interface TextbookItem {
   name: string;
 }
 
+interface UploadFileItem {
+  file: File;
+  status: "pending" | "uploading" | "done" | "error";
+  error?: string;
+}
+
 const PAPER_TYPES = ["单元测试", "月考", "期中", "期末", "其他"];
 
 function formatSize(bytes: number): string {
@@ -52,12 +58,14 @@ export function PaperLibrary() {
 
   // 上传弹窗
   const [uploadOpen, setUploadOpen] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<UploadFileItem[]>([]);
   const [title, setTitle] = useState("");
   const [paperType, setPaperType] = useState("其他");
   const [textbookId, setTextbookId] = useState("");
   const [remarks, setRemarks] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadSummary, setUploadSummary] = useState<{ ok: number; fail: number } | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   // 编辑弹窗
@@ -196,35 +204,71 @@ export function PaperLibrary() {
   };
 
   const resetUpload = () => {
-    setFile(null);
+    setFiles([]);
     setTitle("");
     setPaperType("其他");
     setTextbookId("");
     setRemarks("");
+    setUploadProgress(0);
+    setUploadSummary(null);
     setUploadOpen(false);
   };
 
-  const handleUpload = async () => {
-    if (!file) return alert("请先选择文件");
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("title", title);
-      fd.append("paperType", paperType);
-      fd.append("textbookId", textbookId);
-      fd.append("folderId", uploadFolder);
-      fd.append("remarks", remarks);
-      const res = await fetch("/tiku/api/papers", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "上传失败");
-      resetUpload();
-      loadPapers();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : "上传失败");
-    } finally {
-      setUploading(false);
+  const tryCloseUpload = () => {
+    if (uploading) {
+      alert("上传中请稍候");
+      return;
     }
+    resetUpload();
+  };
+
+  const addFiles = (list: FileList | File[]) => {
+    const all = Array.from(list);
+    const accepted = all.filter((f) => /\.(docx|pdf)$/i.test(f.name));
+    const rejected = all.filter((f) => !/\.(docx|pdf)$/i.test(f.name));
+    if (rejected.length > 0) {
+      alert(`以下文件已拒绝（仅支持 .docx 或 .pdf）：\n${rejected.map((f) => f.name).join("\n")}`);
+    }
+    if (accepted.length > 0) {
+      setFiles(accepted.map((file) => ({ file, status: "pending" as const })));
+      setUploadSummary(null);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (files.length === 0) return alert("请先选择文件");
+    setUploading(true);
+    setUploadSummary(null);
+    setUploadProgress(0);
+    const single = files.length === 1;
+    let ok = 0;
+    let fail = 0;
+    for (let i = 0; i < files.length; i++) {
+      setUploadProgress(i + 1);
+      setFiles((cur) => cur.map((it, j) => (j === i ? { ...it, status: "uploading", error: undefined } : it)));
+      try {
+        const fd = new FormData();
+        fd.append("file", files[i].file);
+        fd.append("title", single ? title : "");
+        fd.append("paperType", paperType);
+        fd.append("textbookId", textbookId);
+        fd.append("folderId", uploadFolder);
+        fd.append("remarks", remarks);
+        const res = await fetch("/tiku/api/papers", { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "上传失败");
+        ok++;
+        setFiles((cur) => cur.map((it, j) => (j === i ? { ...it, status: "done" } : it)));
+      } catch (e) {
+        fail++;
+        const msg = e instanceof Error ? e.message : "上传失败";
+        setFiles((cur) => cur.map((it, j) => (j === i ? { ...it, status: "error", error: msg } : it)));
+      }
+    }
+    setUploading(false);
+    setUploadSummary({ ok, fail });
+    loadPapers();
+    if (fail === 0) setTimeout(() => resetUpload(), 1500);
   };
 
   const handleDelete = async (p: PaperItem) => {
@@ -496,7 +540,7 @@ export function PaperLibrary() {
 
       {/* 上传弹窗 */}
       {uploadOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={resetUpload}>
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={tryCloseUpload}>
           <div className="bg-white rounded-xl p-6 w-[520px] max-w-[92vw]" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold text-gray-800 mb-4">上传试卷</h3>
 
@@ -506,23 +550,22 @@ export function PaperLibrary() {
               onDrop={(e) => {
                 e.preventDefault();
                 setDragOver(false);
-                const f = e.dataTransfer.files?.[0];
-                if (f && /\.(docx|pdf)$/i.test(f.name)) setFile(f);
-                else if (f) alert("仅支持 .docx 或 .pdf 文件");
+                if (uploading) return;
+                if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
               }}
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => { if (!uploading) fileInputRef.current?.click(); }}
               className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer mb-4 transition-colors ${
                 dragOver ? "border-blue-400 bg-blue-50" : "border-gray-300 hover:border-blue-300"
               }`}
             >
-              {file ? (
+              {files.length > 0 ? (
                 <div>
-                  <p className="text-green-600 font-medium">{file.name}</p>
-                  <p className="text-xs text-gray-400 mt-1">{formatSize(file.size)} · 点击重新选择</p>
+                  <p className="text-green-600 font-medium">已选择 {files.length} 个文件</p>
+                  <p className="text-xs text-gray-400 mt-1">点击或拖拽可重新选择</p>
                 </div>
               ) : (
                 <div>
-                  <p className="text-gray-500">拖拽 Word / PDF 试卷到此处，或点击选择</p>
+                  <p className="text-gray-500">拖拽 Word / PDF 试卷到此处，或点击选择（可多选）</p>
                   <p className="text-xs text-gray-400 mt-1">.docx ≤ 20MB · .pdf ≤ 30MB</p>
                 </div>
               )}
@@ -530,24 +573,51 @@ export function PaperLibrary() {
                 ref={fileInputRef}
                 type="file"
                 accept=".docx,.pdf"
+                multiple
                 className="hidden"
                 onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) setFile(f);
+                  if (e.target.files?.length) addFiles(e.target.files);
+                  e.target.value = "";
                 }}
               />
             </div>
 
-            <div className="space-y-3">
-              <div>
-                <label className="text-sm text-gray-600">标题（留空自动提取）</label>
-                <input
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="如：2026年上学期期末考试卷"
-                  className="w-full px-3 py-2 border rounded-lg mt-1 text-sm"
-                />
+            {files.length > 0 && (
+              <div className="mb-4 border rounded-lg divide-y max-h-44 overflow-y-auto">
+                {files.map((it, i) => (
+                  <div key={i} className="px-3 py-2 flex items-center gap-2 text-sm">
+                    <span className="flex-1 min-w-0 truncate text-gray-700" title={it.file.name}>{it.file.name}</span>
+                    <span className="text-xs text-gray-400 flex-shrink-0">{formatSize(it.file.size)}</span>
+                    <span className={`text-xs flex-shrink-0 ${
+                      it.status === "done" ? "text-green-600"
+                      : it.status === "error" ? "text-red-500"
+                      : it.status === "uploading" ? "text-blue-500"
+                      : "text-gray-400"
+                    }`}>
+                      {it.status === "done" ? "✓ 成功"
+                        : it.status === "error" ? `✗ 失败：${it.error || "未知错误"}`
+                        : it.status === "uploading" ? "上传中…"
+                        : "等待中"}
+                    </span>
+                  </div>
+                ))}
               </div>
+            )}
+
+            <div className="space-y-3">
+              {files.length > 1 ? (
+                <p className="text-xs text-gray-400">多文件上传时各按文件名自动命名</p>
+              ) : (
+                <div>
+                  <label className="text-sm text-gray-600">标题（留空自动提取）</label>
+                  <input
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="如：2026年上学期期末考试卷"
+                    className="w-full px-3 py-2 border rounded-lg mt-1 text-sm"
+                  />
+                </div>
+              )}
               <div className="flex gap-3">
                 <div className="flex-1">
                   <label className="text-sm text-gray-600">类型</label>
@@ -599,17 +669,30 @@ export function PaperLibrary() {
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 mt-5">
-              <button onClick={resetUpload} className="px-4 py-2 border rounded-lg text-sm text-gray-600">
-                取消
-              </button>
-              <button
-                onClick={handleUpload}
-                disabled={uploading || !file}
-                className="px-5 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600 disabled:bg-gray-300"
-              >
-                {uploading ? "上传中..." : "存入试卷库"}
-              </button>
+            <div className="flex justify-end items-center gap-2 mt-5">
+              {uploadSummary && (
+                <span className="text-sm text-gray-600 mr-auto">
+                  完成：成功 {uploadSummary.ok} 个{uploadSummary.fail > 0 ? `，失败 ${uploadSummary.fail} 个` : ""}
+                </span>
+              )}
+              {uploadSummary ? (
+                <button onClick={tryCloseUpload} className="px-4 py-2 border rounded-lg text-sm text-gray-600">
+                  关闭
+                </button>
+              ) : (
+                <>
+                  <button onClick={tryCloseUpload} className="px-4 py-2 border rounded-lg text-sm text-gray-600">
+                    取消
+                  </button>
+                  <button
+                    onClick={handleUpload}
+                    disabled={uploading || files.length === 0}
+                    className="px-5 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600 disabled:bg-gray-300"
+                  >
+                    {uploading ? `上传中 ${uploadProgress}/${files.length}` : "存入试卷库"}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
