@@ -133,8 +133,7 @@ export function QuestionLibrary() {
   // ===== 初始化 =====
   useEffect(() => {
     fetch("/tiku/api/textbooks").then((r) => r.json()).then((d) => {
-      setTextbooks(d.data || []);
-      if (d.data && d.data.length) setTextbookId(String(d.data[0].id));
+      setTextbooks(d.data || []);   // 默认「全部课本」不筛选
     });
   }, []);
 
@@ -371,6 +370,7 @@ export function QuestionLibrary() {
             onChange={(e) => { setTextbookId(e.target.value); setChapterId(""); setLessonId(""); setExpandedChapter(0); }}
             className="w-full border rounded px-2 py-1.5 text-sm"
           >
+            <option value="">全部课本</option>
             {textbooks.map((t) => <option key={t.id} value={t.id}>{shortBook(t.name)}</option>)}
           </select>
         </div>
