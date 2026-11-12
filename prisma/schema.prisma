@@ -151,7 +151,7 @@ model StudentQuestion {
   chapter     Chapter?  @relation(fields: [chapterId], references: [id])
   lessonId    Int?      @map("lesson_id")
   lesson      Lesson?   @relation(fields: [lessonId], references: [id])
-  status      String    @default("待讲解")            // 待讲解 / 已解答
+  explanation String    @default("")                 // 我的解释（TipTap JSON：文字/公式/图片）
   askedAt     DateTime  @default(now()) @map("asked_at") // 提问时间（可回溯补录）
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")

@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+
+const RichTextEditor = dynamic(
+  () => import("@/components/tiptap/rich-text-editor").then((m) => m.RichTextEditor),
+  { ssr: false }
+);
 
 /** 学生问题库：课上学生提问的随手记录，文字/截图，按 课本→章→课时 归类 */
 
@@ -11,15 +17,13 @@ interface QuestionItem {
   id: number;
   content: string;
   studentName: string | null;
-  status: string;
+  explanation: string;
   askedAt: string;
   textbook: { id: number; name: string } | null;
   chapter: { id: number; title: string } | null;
   lesson: { id: number; title: string } | null;
   images: { imageId: string }[];
 }
-
-const STATUSES = ["待讲解", "已解答"];
 
 function shortBook(name: string) {
   return name.replace(/^人教版高中物理/, "").replace(/^人教版/, "");
@@ -49,7 +53,6 @@ export function QuestionLibrary() {
   const [lessonsMap, setLessonsMap] = useState<Record<number, LessonItem[]>>({});
   const [chapterId, setChapterId] = useState("");
   const [lessonId, setLessonId] = useState("");
-  const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
 
   // ===== 列表 =====
@@ -64,7 +67,7 @@ export function QuestionLibrary() {
   const [fTextbook, setFTextbook] = useState("");
   const [fChapter, setFChapter] = useState("");
   const [fLesson, setFLesson] = useState("");
-  const [fStatus, setFStatus] = useState("待讲解");
+  const [fExplanation, setFExplanation] = useState("");
   const [fAskedAt, setFAskedAt] = useState(toLocalInput(new Date().toISOString()));
   const [fImages, setFImages] = useState<string[]>([]);     // 新图 dataURL
   const [fOldImages, setFOldImages] = useState<string[]>([]); // 编辑时已有图的 imageId
@@ -105,12 +108,11 @@ export function QuestionLibrary() {
     if (textbookId) p.set("textbookId", textbookId);
     if (chapterId) p.set("chapterId", chapterId);
     if (lessonId) p.set("lessonId", lessonId);
-    if (status) p.set("status", status);
     if (search.trim()) p.set("search", search.trim());
     fetch(`/tiku/api/student-questions?${p}`).then((r) => r.json())
       .then((d) => setList(d.data || []))
       .finally(() => setLoading(false));
-  }, [textbookId, chapterId, lessonId, status, search]);
+  }, [textbookId, chapterId, lessonId, search]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -174,7 +176,7 @@ export function QuestionLibrary() {
     setFContent(""); setFStudent("");
     setFTextbook(textbookId || (textbooks[0] ? String(textbooks[0].id) : ""));
     setFChapter(chapterId); setFLesson(lessonId);
-    setFStatus("待讲解");
+    setFExplanation("");
     setFAskedAt(toLocalInput(new Date().toISOString()));
     setFImages([]); setFOldImages([]); setImgErr("");
     setModalOpen(true);
@@ -187,7 +189,7 @@ export function QuestionLibrary() {
     setFTextbook(q.textbook ? String(q.textbook.id) : "");
     setFChapter(q.chapter ? String(q.chapter.id) : "");
     setFLesson(q.lesson ? String(q.lesson.id) : "");
-    setFStatus(q.status);
+    setFExplanation(q.explanation || "");
     setFAskedAt(toLocalInput(q.askedAt));
     setFImages([]); setFOldImages(q.images.map((x) => x.imageId)); setImgErr("");
     setModalOpen(true);
@@ -206,7 +208,7 @@ export function QuestionLibrary() {
         textbookId: fTextbook ? Number(fTextbook) : null,
         chapterId: fChapter ? Number(fChapter) : null,
         lessonId: fLesson ? Number(fLesson) : null,
-        status: fStatus,
+        explanation: fExplanation,
         askedAt: new Date(fAskedAt).toISOString(),
       };
       if (editing) {
@@ -247,14 +249,6 @@ export function QuestionLibrary() {
     if (!confirm("确定删除这条问题？")) return;
     await fetch(`/tiku/api/student-questions/${id}`, { method: "DELETE" });
     load();
-  };
-
-  const setQStatus = async (q: QuestionItem, v: string) => {
-    setList((arr) => arr.map((x) => (x.id === q.id ? { ...x, status: v } : x)));
-    await fetch(`/tiku/api/student-questions/${q.id}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: v }),
-    });
   };
 
   return (
@@ -321,10 +315,6 @@ export function QuestionLibrary() {
             placeholder="搜索问题内容 / 学生名字…"
             className="flex-1 max-w-sm border rounded-lg px-3 py-1.5 text-sm"
           />
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm">
-            <option value="">全部状态</option>
-            {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
           <div className="flex-1" />
           <button
             onClick={openNew}
@@ -364,15 +354,15 @@ export function QuestionLibrary() {
                 {q.chapter && <span className="bg-gray-100 rounded px-1.5 py-0.5">{q.chapter.title}</span>}
                 {q.lesson && <span className="bg-blue-50 text-blue-700 rounded px-1.5 py-0.5">{q.lesson.title}</span>}
                 {q.studentName && <span className="text-gray-700">👤 {q.studentName}</span>}
+                {q.explanation && q.explanation.length > 30 && (
+                  <button
+                    onClick={() => openEdit(q)}
+                    className="text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 hover:bg-emerald-100"
+                    title="已写解释，点击查看"
+                  >💡 有解释</button>
+                )}
                 <span>{fmtTime(q.askedAt)}</span>
                 <div className="flex-1" />
-                <select
-                  value={q.status}
-                  onChange={(e) => setQStatus(q, e.target.value)}
-                  className={`border rounded px-1.5 py-0.5 text-xs ${q.status === "待讲解" ? "text-orange-600 border-orange-200 bg-orange-50" : "text-green-700 border-green-200 bg-green-50"}`}
-                >
-                  {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
                 <button onClick={() => openEdit(q)} className="text-blue-600 hover:underline">编辑</button>
                 <button onClick={() => remove(q.id)} className="text-red-500 hover:underline">删除</button>
               </div>
@@ -461,12 +451,18 @@ export function QuestionLibrary() {
                   {fLessons.map((l) => <option key={l.id} value={l.id}>{l.title}</option>)}
                 </select>
               </div>
-              <div>
-                <label className="text-xs text-gray-500">状态</label>
-                <select value={fStatus} onChange={(e) => setFStatus(e.target.value)}
-                  className="w-full border rounded-lg px-2 py-1.5 text-sm">
-                  {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
+
+            </div>
+
+            <div className="mt-3">
+              <label className="text-xs text-gray-500">我的解释（可写文字、插公式、贴图，可后补）</label>
+              <div className="border rounded-lg">
+                <RichTextEditor
+                  content={fExplanation}
+                  editable={true}
+                  plain
+                  onChange={(_html, json) => setFExplanation(JSON.stringify(json))}
+                />
               </div>
             </div>
 

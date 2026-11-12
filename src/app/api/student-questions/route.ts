@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { storeInlineImages } from "@/lib/images";
 
 // 学生问题库：GET 列表 / POST 新建
 // 与题库共用 problem_images 表存图，按 课本→章→课时 归类
@@ -31,14 +32,12 @@ export async function GET(request: NextRequest) {
     const textbookId = searchParams.get("textbookId");
     const chapterId = searchParams.get("chapterId");
     const lessonId = searchParams.get("lessonId");
-    const status = searchParams.get("status");
     const search = searchParams.get("search");
 
     const where: Record<string, unknown> = {};
     if (textbookId) where.textbookId = Number(textbookId);
     if (chapterId) where.chapterId = Number(chapterId);
     if (lessonId) where.lessonId = Number(lessonId);
-    if (status) where.status = status;
     if (search) {
       where.OR = [
         { content: { contains: search } },
@@ -82,7 +81,7 @@ export async function POST(request: NextRequest) {
         textbookId: body.textbookId ? Number(body.textbookId) : null,
         chapterId: body.chapterId ? Number(body.chapterId) : null,
         lessonId: body.lessonId ? Number(body.lessonId) : null,
-        status: ["待讲解", "已解答"].includes(body.status) ? body.status : "待讲解",
+        explanation: await storeInlineImages(String(body.explanation ?? "")),
         askedAt,
       },
       include: INCLUDE,

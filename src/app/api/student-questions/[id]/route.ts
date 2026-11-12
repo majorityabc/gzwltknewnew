@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { storeInlineImages } from "@/lib/images";
 
 // 学生问题库：PATCH 修改 / DELETE 删除
 
@@ -38,7 +39,7 @@ export async function PATCH(
     if (body.textbookId !== undefined) data.textbookId = body.textbookId ? Number(body.textbookId) : null;
     if (body.chapterId !== undefined) data.chapterId = body.chapterId ? Number(body.chapterId) : null;
     if (body.lessonId !== undefined) data.lessonId = body.lessonId ? Number(body.lessonId) : null;
-    if (body.status !== undefined && ["待讲解", "已解答"].includes(body.status)) data.status = body.status;
+    if (body.explanation !== undefined) data.explanation = await storeInlineImages(String(body.explanation));
     if (body.askedAt !== undefined) {
       const d = new Date(body.askedAt);
       if (!isNaN(d.getTime())) data.askedAt = d;
