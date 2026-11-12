@@ -44,36 +44,46 @@ function toLocalInput(iso: string) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** AI 返回文本 → TipTap JSON：段落按空行分，$...$ 转公式节点，**粗体** 保留 */
+/** AI 返回文本 → TipTap JSON：先把所有公式抽出来占位（防止 $$..$$ 跨行被段落拆分劈开），
+ *  再分段，段内恢复公式节点；**粗体** 保留。兼容 $$..$$ \\[..\\] \\(..\\) $..$ 四种包裹。 */
 function mdToTiptap(md: string): string {
+  // ① 抽公式 → 占位符 \u0001N\u0001
+  const maths: string[] = [];
+  const MATH_RE = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]+)\$/g;
+  const noMath = md.replace(MATH_RE, (_m, a, b, c, d) => {
+    maths.push(String(a ?? b ?? c ?? d).trim());
+    return `\u0001${maths.length - 1}\u0001`;
+  });
+
   const pushText = (nodes: unknown[], t: string) => {
-    for (const part of t.split(/(\*\*[^*]+\*\*)/)) {
-      if (!part) continue;
-      if (part.startsWith("**") && part.endsWith("**")) {
-        nodes.push({ type: "text", text: part.slice(2, -2), marks: [{ type: "bold" }] });
-      } else {
-        nodes.push({ type: "text", text: part });
+    // 先按公式占位符拆，再处理 **粗体**
+    for (const seg of t.split(/(\u0001\d+\u0001)/)) {
+      if (!seg) continue;
+      const ph = seg.match(/^\u0001(\d+)\u0001$/);
+      if (ph) {
+        nodes.push({ type: "inlineMath", attrs: { text: maths[Number(ph[1])] } });
+        continue;
+      }
+      for (const part of seg.split(/(\*\*[^*]+\*\*)/)) {
+        if (!part) continue;
+        if (part.startsWith("**") && part.endsWith("**")) {
+          nodes.push({ type: "text", text: part.slice(2, -2), marks: [{ type: "bold" }] });
+        } else {
+          nodes.push({ type: "text", text: part });
+        }
       }
     }
   };
-  const inline = (text: string) => {
-    const nodes: unknown[] = [];
-    let rest = text.replace(/^#{1,4}\s*/, "").replace(/^[-*]\s+/, "").replace(/^\d+[.、]\s*/, "");
-    // 兼容四种 LaTeX 包裹：$$..$$  \[..\]  \(..\)  $..$
-    const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]+)\$/;
-    let m: RegExpMatchArray | null;
-    while ((m = rest.match(re))) {
-      if (m.index && m.index > 0) pushText(nodes, rest.slice(0, m.index));
-      nodes.push({ type: "inlineMath", attrs: { text: m[1] ?? m[2] ?? m[3] ?? m[4] } });
-      rest = rest.slice((m.index || 0) + m[0].length);
-    }
-    if (rest) pushText(nodes, rest);
-    return nodes.length ? nodes : undefined;
-  };
-  const paras = md.split(/\n{2,}|\n(?=[-\d#•])/).map((x) => x.trim()).filter(Boolean);
+
+  const paras = noMath.split(/\n{2,}|\n(?=[-\d#•])/).map((x) => x.trim()).filter(Boolean);
   return JSON.stringify({
     type: "doc",
-    content: paras.map((t) => ({ type: "paragraph", content: inline(t) })),
+    content: paras.map((t) => {
+      const clean = t.replace(/^#{1,4}\s*/, "").replace(/^[-*]\s+/, "").replace(/^\d+[.、]\s*/, "");
+      const nodes: unknown[] = [];
+      pushText(nodes, clean);
+      return { type: "paragraph", content: nodes.length ? nodes : undefined };
+    }),
   });
 }
 

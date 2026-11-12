@@ -1,5 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { readFileSync } from "fs";
+
+const execFileP = promisify(execFile);
+
+/** Kimi Code OAuth token（15 分钟过期，过期时用 kimi CLI 代刷） */
+function readKimiCreds(): { access_token: string; expires_at?: number } {
+  const file = process.env.KIMI_CRED_FILE || "/root/.kimi-code/credentials/kimi-code.json";
+  return JSON.parse(readFileSync(file, "utf8"));
+}
+
+async function getKimiToken(force = false): Promise<string> {
+  const creds = readKimiCreds();
+  const fresh = creds.expires_at && creds.expires_at - Date.now() / 1000 > 120;
+  if (fresh && !force) return creds.access_token;
+  try {
+    await execFileP(process.env.KIMI_CLI || "/root/.kimi-code/bin/kimi", ["-p", "hi"], { timeout: 150000 });
+  } catch (e) {
+    console.warn("kimi CLI refresh failed:", e);
+  }
+  return readKimiCreds().access_token;
+}
+
+/** 调 Kimi k3（支持图片输入），401 时强制刷新 token 重试一次 */
+async function callKimi(messages: unknown[], maxTokens: number): Promise<string> {
+  const base = process.env.KIMI_OCR_BASE || "https://api.kimi.com/coding/v1";
+  const model = process.env.KIMI_OCR_MODEL || "k3";
+  const doFetch = async (token: string) =>
+    fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
+      signal: AbortSignal.timeout(120000),
+    });
+  let res = await doFetch(await getKimiToken());
+  if (res.status === 401) res = await doFetch(await getKimiToken(true));
+  if (!res.ok) throw new Error(`Kimi ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  const content = data.choices?.[0]?.message?.content || "";
+  if (!content.trim()) throw new Error("Kimi 返回空内容");
+  return content;
+}
 
 // 学生问题 · AI 回答：老师给思路提示，AI 按提示写答案
 // 有截图 → glm-4.6v（能读图）；纯文字 → deepseek-chat（快）
@@ -42,36 +85,43 @@ export async function POST(
       `【老师的思路提示】\n${prompt}`,
     ].filter(Boolean).join("\n\n");
 
-    // 统一走 DeepSeek：deepseek-flash 支持读图，截图一并传入
-    const key = process.env.DEEPSEEK_API_KEY || "";
-    const base = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
-    const model = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
-    if (!key) return NextResponse.json({ error: "未配置 DeepSeek 密钥" }, { status: 500 });
+    // Kimi k3 主力（支持读图）；失败自动降级 DeepSeek
+    const userContent: unknown = q.images.length > 0
+      ? [
+          { type: "text", text: ctx },
+          ...q.images.slice(0, 4).map((im) => ({
+            type: "image_url",
+            image_url: { url: `data:${im.image.mimeType};base64,${im.image.data}` },
+          })),
+        ]
+      : ctx;
+    const messages = [
+      { role: "system", content: SYSTEM },
+      { role: "user", content: userContent },
+    ];
 
-    const contentParts: unknown[] = [{ type: "text", text: ctx }];
-    for (const im of q.images.slice(0, 4)) {
-      contentParts.push({
-        type: "image_url",
-        image_url: { url: `data:${im.image.mimeType};base64,${im.image.data}` },
+    let answer = "";
+    let via = "";
+    try {
+      answer = await callKimi(messages, 4096);
+      via = "kimi-k3";
+    } catch (e) {
+      console.warn("ai-answer Kimi 失败，降级 DeepSeek:", e instanceof Error ? e.message : e);
+      const key = process.env.DEEPSEEK_API_KEY || "";
+      if (!key) throw e;
+      const base = process.env.DEEPSEEK_OCR_BASE || "https://api.deepseek.com";
+      const model = process.env.DEEPSEEK_OCR_MODEL || "deepseek-flash";
+      const r = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model, messages, temperature: 0.4 }),
+        signal: AbortSignal.timeout(90000),
       });
+      if (!r.ok) throw new Error(`DeepSeek ${r.status}: ${(await r.text()).slice(0, 200)}`);
+      const j = await r.json();
+      answer = j.choices?.[0]?.message?.content || "";
+      via = model;
     }
-    const r = await fetch(`${base}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: SYSTEM },
-          { role: "user", content: q.images.length > 0 ? contentParts : ctx },
-        ],
-        temperature: 0.4,
-      }),
-      signal: AbortSignal.timeout(90000),
-    });
-    if (!r.ok) throw new Error(`DeepSeek ${r.status}: ${(await r.text()).slice(0, 200)}`);
-    const j = await r.json();
-    const answer: string = j.choices?.[0]?.message?.content || "";
-    const via = model;
 
     if (!answer) return NextResponse.json({ error: "AI 没有返回内容，请重试" }, { status: 502 });
     return NextResponse.json({ data: { answer, via } });
