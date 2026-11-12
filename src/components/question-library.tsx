@@ -44,6 +44,39 @@ function toLocalInput(iso: string) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** AI 返回文本 → TipTap JSON：段落按空行分，$...$ 转公式节点，**粗体** 保留 */
+function mdToTiptap(md: string): string {
+  const pushText = (nodes: unknown[], t: string) => {
+    for (const part of t.split(/(\*\*[^*]+\*\*)/)) {
+      if (!part) continue;
+      if (part.startsWith("**") && part.endsWith("**")) {
+        nodes.push({ type: "text", text: part.slice(2, -2), marks: [{ type: "bold" }] });
+      } else {
+        nodes.push({ type: "text", text: part });
+      }
+    }
+  };
+  const inline = (text: string) => {
+    const nodes: unknown[] = [];
+    let rest = text.replace(/^#{1,4}\s*/, "").replace(/^[-*]\s+/, "").replace(/^\d+[.、]\s*/, "");
+    // 兼容四种 LaTeX 包裹：$$..$$  \[..\]  \(..\)  $..$
+    const re = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]+)\$/;
+    let m: RegExpMatchArray | null;
+    while ((m = rest.match(re))) {
+      if (m.index && m.index > 0) pushText(nodes, rest.slice(0, m.index));
+      nodes.push({ type: "inlineMath", attrs: { text: m[1] ?? m[2] ?? m[3] ?? m[4] } });
+      rest = rest.slice((m.index || 0) + m[0].length);
+    }
+    if (rest) pushText(nodes, rest);
+    return nodes.length ? nodes : undefined;
+  };
+  const paras = md.split(/\n{2,}|\n(?=[-\d#•])/).map((x) => x.trim()).filter(Boolean);
+  return JSON.stringify({
+    type: "doc",
+    content: paras.map((t) => ({ type: "paragraph", content: inline(t) })),
+  });
+}
+
 export function QuestionLibrary() {
   // ===== 筛选 =====
   const [textbooks, setTextbooks] = useState<TextbookItem[]>([]);
@@ -62,6 +95,14 @@ export function QuestionLibrary() {
   // ===== 弹窗（新建/编辑） =====
   const [editing, setEditing] = useState<QuestionItem | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<"view" | "edit">("edit");
+  const [viewMax, setViewMax] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiAnswer, setAiAnswer] = useState("");
+  const [aiVia, setAiVia] = useState("");
+  const [aiErr, setAiErr] = useState("");
   const [fContent, setFContent] = useState("");
   const [fStudent, setFStudent] = useState("");
   const [fTextbook, setFTextbook] = useState("");
@@ -179,10 +220,11 @@ export function QuestionLibrary() {
     setFExplanation("");
     setFAskedAt(toLocalInput(new Date().toISOString()));
     setFImages([]); setFOldImages([]); setImgErr("");
+    setModalMode("edit");
     setModalOpen(true);
   };
 
-  const openEdit = (q: QuestionItem) => {
+  const fillForm = (q: QuestionItem) => {
     setEditing(q);
     setFContent(q.content);
     setFStudent(q.studentName || "");
@@ -192,6 +234,64 @@ export function QuestionLibrary() {
     setFExplanation(q.explanation || "");
     setFAskedAt(toLocalInput(q.askedAt));
     setFImages([]); setFOldImages(q.images.map((x) => x.imageId)); setImgErr("");
+  };
+
+  // 查看：只读展示问题 + 解释
+  const openView = (q: QuestionItem, withAI = false) => {
+    fillForm(q);
+    setModalMode("view");
+    setViewMax(false);
+    setAiOpen(withAI); setAiAnswer(""); setAiErr("");
+    setModalOpen(true);
+  };
+
+  const genAI = async () => {
+    if (!editing || aiBusy) return;
+    if (!aiPrompt.trim()) { setAiErr("先写一句你的解题思路提示"); return; }
+    setAiBusy(true); setAiErr(""); setAiAnswer("");
+    try {
+      const r = await fetch(`/tiku/api/student-questions/${editing.id}/ai-answer`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: aiPrompt.trim() }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "AI 调用失败");
+      setAiAnswer(d.data.answer); setAiVia(d.data.via || "");
+    } catch (e) {
+      setAiErr(e instanceof Error ? e.message : "AI 调用失败");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const writeAI = async (mode: "replace" | "append") => {
+    if (!editing || !aiAnswer) return;
+    const newDoc = JSON.parse(mdToTiptap(aiAnswer));
+    let doc = newDoc;
+    if (mode === "append" && editing.explanation) {
+      try {
+        const old = JSON.parse(editing.explanation);
+        doc = { type: "doc", content: [...(old.content || []), ...newDoc.content] };
+      } catch { /* 用新文档 */ }
+    }
+    const r = await fetch(`/tiku/api/student-questions/${editing.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ explanation: JSON.stringify(doc) }),
+    });
+    const d = await r.json();
+    if (r.ok && d.data) {
+      setList((arr) => arr.map((x) => (x.id === editing.id ? { ...x, explanation: d.data.explanation } : x)));
+      setEditing(d.data);
+      setFExplanation(d.data.explanation);
+      setAiOpen(false); setAiAnswer("");
+    } else {
+      alert("写入失败，请重试");
+    }
+  };
+
+  const openEdit = (q: QuestionItem) => {
+    fillForm(q);
+    setModalMode("edit");
     setModalOpen(true);
   };
 
@@ -356,14 +456,15 @@ export function QuestionLibrary() {
                 {q.studentName && <span className="text-gray-700">👤 {q.studentName}</span>}
                 {q.explanation && q.explanation.length > 30 && (
                   <button
-                    onClick={() => openEdit(q)}
+                    onClick={() => openView(q)}
                     className="text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 hover:bg-emerald-100"
                     title="已写解释，点击查看"
                   >💡 有解释</button>
                 )}
                 <span>{fmtTime(q.askedAt)}</span>
                 <div className="flex-1" />
-                <button onClick={() => openEdit(q)} className="text-blue-600 hover:underline">编辑</button>
+                <button onClick={() => openView(q)} className="text-blue-600 hover:underline">查看</button>
+                <button onClick={() => openView(q, true)} className="text-violet-600 hover:underline">🤖 AI</button>
                 <button onClick={() => remove(q.id)} className="text-red-500 hover:underline">删除</button>
               </div>
             </div>
@@ -374,7 +475,92 @@ export function QuestionLibrary() {
       {/* ===== 新建/编辑弹窗 ===== */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setModalOpen(false)}>
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
+          <div className={`bg-white shadow-2xl overflow-y-auto p-5 ${viewMax ? "w-[98vw] h-[94vh] max-w-none rounded-lg" : "w-full max-w-2xl max-h-[90vh] rounded-xl"}`} onClick={(e) => e.stopPropagation()}>
+            {modalMode === "view" && editing ? (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-lg font-bold">问题详情</div>
+                  <div className="flex gap-2">
+                    <button onClick={() => { setAiOpen((o) => !o); setAiErr(""); }}
+                      className={`px-3 py-1.5 rounded-lg text-sm ${aiOpen ? "bg-violet-600 text-white" : "bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100"}`}>
+                      🤖 AI 回答
+                    </button>
+                    <button onClick={() => setViewMax((v) => !v)}
+                      className="px-3 py-1.5 bg-gray-100 rounded-lg text-sm text-gray-600 hover:bg-gray-200">
+                      {viewMax ? "🗕 还原" : "⛶ 最大化"}
+                    </button>
+                    <button onClick={() => setModalMode("edit")}
+                      className="px-3 py-1.5 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600">编辑</button>
+                  </div>
+                </div>
+
+                {aiOpen && (
+                  <div className="mb-3 border border-violet-200 bg-violet-50/60 rounded-lg p-3">
+                    <div className="text-xs text-violet-700 font-medium mb-1.5">先写你的解题思路提示，AI 照着这个思路讲这道题</div>
+                    <textarea
+                      value={aiPrompt}
+                      onChange={(e) => setAiPrompt(e.target.value)}
+                      rows={2}
+                      placeholder="例：先做受力分析，用正交分解；重点讲静摩擦力方向怎么判断；最后给个口诀"
+                      className="w-full border border-violet-200 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-violet-200 outline-none"
+                    />
+                    <div className="flex items-center gap-2 mt-2">
+                      <button onClick={genAI} disabled={aiBusy}
+                        className="px-4 py-1.5 bg-violet-600 text-white rounded-lg text-sm font-medium hover:bg-violet-700 disabled:opacity-50">
+                        {aiBusy ? "生成中（约10~30秒）…" : aiAnswer ? "重新生成" : "生成回答"}
+                      </button>
+                      {aiVia && <span className="text-[11px] text-gray-400">via {aiVia}</span>}
+                      {aiErr && <span className="text-xs text-red-500">{aiErr}</span>}
+                    </div>
+                    {aiAnswer && (
+                      <div className="mt-2 bg-white border border-violet-100 rounded-lg p-3">
+                        <RichTextEditor key={aiAnswer.length + ":" + aiAnswer.slice(0, 20)} content={mdToTiptap(aiAnswer)} editable={false} plain />
+                        <div className="flex gap-2 mt-2 pt-2 border-t border-dashed">
+                          <button onClick={() => writeAI("replace")}
+                            className="px-3 py-1 bg-emerald-600 text-white rounded text-xs hover:bg-emerald-700">✅ 写入解释（替换）</button>
+                          <button onClick={() => writeAI("append")}
+                            className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded text-xs hover:bg-emerald-100">➕ 追加到解释</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {editing.content && (
+                  <div className="text-[15px] text-gray-800 whitespace-pre-wrap leading-relaxed">{editing.content}</div>
+                )}
+                {editing.images.length > 0 && (
+                  <div className="flex gap-2 mt-2 flex-wrap">
+                    {editing.images.map((im) => (
+                      <img key={im.imageId} src={`/tiku/api/images/${im.imageId}`} alt="截图"
+                        onClick={() => setLightbox(`/tiku/api/images/${im.imageId}`)}
+                        className="max-h-56 rounded border cursor-zoom-in hover:opacity-90" />
+                    ))}
+                  </div>
+                )}
+                {/* 元信息：小字弱化展示 */}
+                <div className="flex items-center gap-1.5 mt-3 text-[11px] text-gray-400 flex-wrap">
+                  {editing.textbook && <span className="bg-gray-50 rounded px-1 py-px">{shortBook(editing.textbook.name)}</span>}
+                  {editing.chapter && <span className="bg-gray-50 rounded px-1 py-px">{editing.chapter.title}</span>}
+                  {editing.lesson && <span className="bg-gray-50 rounded px-1 py-px">{editing.lesson.title}</span>}
+                  {editing.studentName && <span>{editing.studentName}</span>}
+                  <span>{fmtTime(editing.askedAt)}</span>
+                </div>
+                {editing.explanation && editing.explanation.length > 30 ? (
+                  <div className="mt-3 pt-3 border-t border-dashed">
+                    <div className="text-xs text-emerald-700 font-medium mb-1">💡 我的解释</div>
+                    <RichTextEditor content={editing.explanation} editable={false} plain />
+                  </div>
+                ) : (
+                  <div className="mt-3 pt-3 border-t border-dashed text-xs text-gray-400">还没写解释，点右上角「编辑」可以补。</div>
+                )}
+                <div className="flex justify-end gap-2 mt-4">
+                  <button onClick={() => { setModalOpen(false); remove(editing.id); }}
+                    className="px-4 py-2 border border-red-200 text-red-500 rounded-lg text-sm hover:bg-red-50">删除</button>
+                  <button onClick={() => setModalOpen(false)} className="px-4 py-2 border rounded-lg text-sm text-gray-600">关闭</button>
+                </div>
+              </>
+            ) : (
+              <>
             <div className="text-lg font-bold mb-3">{editing ? "编辑问题" : "记一个问题"}</div>
 
             <textarea
@@ -473,6 +659,8 @@ export function QuestionLibrary() {
                 {saving ? "保存中…" : "保存"}
               </button>
             </div>
+              </>
+            )}
           </div>
         </div>
       )}
