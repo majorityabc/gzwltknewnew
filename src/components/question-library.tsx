@@ -106,6 +106,58 @@ export function QuestionLibrary() {
   const [editing, setEditing] = useState<QuestionItem | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<"view" | "edit">("edit");
+  // ===== 问题篮（localStorage 持久化，和组卷篮一个思路）=====
+  interface BasketItem { id: number; content: string; studentName: string | null; book: string; chapter: string; lesson: string; hasExpl: boolean }
+  const [basket, setBasket] = useState<BasketItem[]>([]);
+  const [basketOpen, setBasketOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  useEffect(() => {
+    try { setBasket(JSON.parse(localStorage.getItem("questionBasket") || "[]")); } catch { /* 空 */ }
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("questionBasket", JSON.stringify(basket)); } catch { /* 忽略 */ }
+  }, [basket]);
+
+  const inBasket = (id: number) => basket.some((b) => b.id === id);
+  const toggleBasket = (q: QuestionItem) => {
+    setBasket((arr) => {
+      if (arr.some((b) => b.id === q.id)) return arr.filter((b) => b.id !== q.id);
+      return [...arr, {
+        id: q.id,
+        content: q.content,
+        studentName: q.studentName,
+        book: q.textbook ? shortBook(q.textbook.name) : "",
+        chapter: q.chapter?.title || "",
+        lesson: q.lesson?.title || "",
+        hasExpl: !!q.explanation && q.explanation.length > 30,
+      }];
+    });
+  };
+  const exportBasket = async () => {
+    if (!basket.length || exporting) return;
+    setExporting(true);
+    try {
+      const r = await fetch("/tiku/api/student-questions/export-basket", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: basket.map((b) => b.id) }),
+      });
+      if (!r.ok) throw new Error();
+      const blob = await r.blob();
+      const cd = r.headers.get("Content-Disposition") || "";
+      const m = cd.match(/filename\*=UTF-8''([^;]+)/);
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = u;
+      a.download = m ? decodeURIComponent(m[1]) : "问题篮.docx";
+      a.click();
+      URL.revokeObjectURL(u);
+    } catch {
+      alert("导出失败，请重试");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const [viewMax, setViewMax] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -427,6 +479,18 @@ export function QuestionLibrary() {
           />
           <div className="flex-1" />
           <button
+            onClick={() => setBasketOpen(true)}
+            className="relative px-3 py-1.5 bg-white border rounded-lg text-sm hover:border-amber-300 hover:bg-amber-50"
+            title="问题篮"
+          >
+            🧺 问题篮
+            {basket.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-amber-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+                {basket.length}
+              </span>
+            )}
+          </button>
+          <button
             onClick={openNew}
             className="px-4 py-1.5 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600"
           >
@@ -473,6 +537,11 @@ export function QuestionLibrary() {
                 )}
                 <span>{fmtTime(q.askedAt)}</span>
                 <div className="flex-1" />
+                <button
+                  onClick={() => toggleBasket(q)}
+                  className={inBasket(q.id) ? "text-amber-600 font-medium" : "text-gray-400 hover:text-amber-600"}
+                  title={inBasket(q.id) ? "移出问题篮" : "加入问题篮"}
+                >🧺</button>
                 <button onClick={() => openView(q)} className="text-blue-600 hover:underline">查看</button>
                 <button onClick={() => openView(q, true)} className="text-violet-600 hover:underline">🤖 AI</button>
                 <button onClick={() => remove(q.id)} className="text-red-500 hover:underline">删除</button>
@@ -564,6 +633,8 @@ export function QuestionLibrary() {
                   <div className="mt-3 pt-3 border-t border-dashed text-xs text-gray-400">还没写解释，点右上角「编辑」可以补。</div>
                 )}
                 <div className="flex justify-end gap-2 mt-4">
+                  <a href={`/tiku/api/student-questions/${editing.id}/export`} target="_blank" rel="noreferrer"
+                    className="px-4 py-2 border border-blue-200 text-blue-600 rounded-lg text-sm hover:bg-blue-50">⬇ 导出 Word</a>
                   <button onClick={() => { setModalOpen(false); remove(editing.id); }}
                     className="px-4 py-2 border border-red-200 text-red-500 rounded-lg text-sm hover:bg-red-50">删除</button>
                   <button onClick={() => setModalOpen(false)} className="px-4 py-2 border rounded-lg text-sm text-gray-600">关闭</button>
@@ -671,6 +742,51 @@ export function QuestionLibrary() {
             </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ===== 问题篮 ===== */}
+      {basketOpen && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setBasketOpen(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-lg font-bold">🧺 问题篮（{basket.length}）</div>
+              <div className="flex gap-2">
+                {basket.length > 0 && (
+                  <button onClick={() => { if (confirm("清空问题篮？")) setBasket([]); }}
+                    className="px-3 py-1.5 text-sm text-red-500 border border-red-200 rounded-lg hover:bg-red-50">清空</button>
+                )}
+                <button onClick={exportBasket} disabled={!basket.length || exporting}
+                  className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
+                  {exporting ? "导出中…" : "⬇ 导出成一个 Word"}
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {basket.length === 0 && (
+                <div className="text-center text-gray-400 text-sm py-10">
+                  篮子是空的。在问题卡片上点 🧺 加进来，最后一起导出成一个 Word。
+                </div>
+              )}
+              {basket.map((b, i) => (
+                <div key={b.id} className="border rounded-lg p-2.5 flex items-start gap-2">
+                  <span className="text-xs text-gray-400 font-mono mt-1 w-5 shrink-0">{i + 1}.</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-gray-800 truncate">{b.content || "（截图问题）"}</div>
+                    <div className="text-[11px] text-gray-400 mt-0.5 flex gap-1.5 flex-wrap">
+                      {b.book && <span>{b.book}</span>}
+                      {b.chapter && <span>{b.chapter}</span>}
+                      {b.lesson && <span>{b.lesson}</span>}
+                      {b.studentName && <span>👤 {b.studentName}</span>}
+                      {b.hasExpl && <span className="text-emerald-600">💡 有解释</span>}
+                    </div>
+                  </div>
+                  <button onClick={() => setBasket((arr) => arr.filter((x) => x.id !== b.id))}
+                    className="text-red-400 hover:text-red-600 text-lg leading-none shrink-0">×</button>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

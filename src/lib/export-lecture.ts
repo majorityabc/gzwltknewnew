@@ -124,7 +124,9 @@ async function inlineChildren(node: TipTapNode): Promise<InlineChild[]> {
   }
 
   if (node.type === "inlineMath" || node.type === "math") {
-    const latex = (node.attrs?.text as string) || (node.attrs?.latex as string) || "";
+    let latex = (node.attrs?.text as string) || (node.attrs?.latex as string) || "";
+    // docx-math-converter 不认识 \dfrac/\tfrac/\displaystyle，统一降级为 \frac，否则导出成 □ 乱码
+    latex = latex.replace(/\\[dt]frac/g, "\\frac").replace(/\\displaystyle\s*/g, "");
     if (latex) {
       try {
         if (_formulaAsImage) {
