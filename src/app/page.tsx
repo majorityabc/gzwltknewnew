@@ -9,6 +9,7 @@ import { ProblemList } from "@/components/problem-list";
 import type { ProblemItem } from "@/components/problem-list";
 import { BasketView } from "@/components/exam-basket";
 import { PaperLibrary } from "@/components/paper-library";
+import { QuestionLibrary } from "@/components/question-library";
 import type { BasketItem } from "@/components/exam-basket";
 
 import { VoiceInputButton, insertVoiceTextIntoEditor } from "@/components/voice-input-button";
@@ -423,7 +424,7 @@ export default function HomePage() {
 
   const QUESTION_TYPES = ["单选", "多选", "实验", "计算"];
 
-  const [view, setView] = useState<"problems" | "papers" | "basket">("problems");
+  const [view, setView] = useState<"problems" | "papers" | "questions" | "basket">("problems");
 
   return (
     <div className="h-[calc(100vh-40px)] flex flex-col bg-gray-100 pb-10">
@@ -445,6 +446,14 @@ export default function HomePage() {
             }`}
           >
             📄 试卷
+          </button>
+          <button
+            onClick={() => setView("questions")}
+            className={`px-5 py-2 text-sm font-medium transition-colors ${
+              view === "questions" ? "bg-blue-500 text-white" : "text-gray-600 hover:bg-gray-50"
+            }`}
+          >
+            💬 问题
           </button>
         </div>
         {view === "problems" && (
@@ -477,7 +486,11 @@ export default function HomePage() {
         )}
       </div>
 
-      {view === "papers" ? (
+      {view === "questions" ? (
+        <div className="flex-1 min-h-0 mt-2 bg-white border-t">
+          <QuestionLibrary />
+        </div>
+      ) : view === "papers" ? (
         <div className="flex-1 min-h-0 mt-2">
           <PaperLibrary />
         </div>

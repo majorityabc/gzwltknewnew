@@ -15,6 +15,7 @@ model Textbook {
   createdAt DateTime  @default(now()) @map("created_at")
   chapters  Chapter[]
   papers    Paper[]
+  studentQuestions StudentQuestion[]
 
   @@map("textbooks")
 }
@@ -31,6 +32,7 @@ model Chapter {
   children        Chapter[]        @relation("ChapterTree")
   knowledgePoints KnowledgePoint[]
   lessons         Lesson[]
+  studentQuestions StudentQuestion[]
 
   @@map("chapters")
 }
@@ -42,6 +44,7 @@ model Lesson {
   sortOrder  Int      @default(0) @map("sort_order")
   createdAt  DateTime @default(now()) @map("created_at")
   chapter    Chapter  @relation(fields: [chapterId], references: [id])
+  studentQuestions StudentQuestion[]
 
   @@map("lessons")
 }
@@ -80,6 +83,7 @@ model ProblemImage {
   mimeType  String
   data      String   // base64
   createdAt DateTime @default(now())
+  studentQuestionImages StudentQuestionImage[]
 
   @@map("problem_images")
 }
@@ -133,4 +137,36 @@ model PaperFolder {
   children  PaperFolder[] @relation("FolderTree")
   createdAt DateTime      @default(now())
   papers    Paper[]
+}
+
+// ============ 学生问题库 ============
+// 课上学生提问的原始记录：一句话/一张截图即可，按 课本→章→课时 归类
+model StudentQuestion {
+  id          Int       @id @default(autoincrement())
+  content     String    @default("")                 // 学生原话（纯文本）
+  studentName String?   @map("student_name")          // 谁问的（可空）
+  textbookId  Int?      @map("textbook_id")
+  textbook    Textbook? @relation(fields: [textbookId], references: [id])
+  chapterId   Int?      @map("chapter_id")
+  chapter     Chapter?  @relation(fields: [chapterId], references: [id])
+  lessonId    Int?      @map("lesson_id")
+  lesson      Lesson?   @relation(fields: [lessonId], references: [id])
+  status      String    @default("待讲解")            // 待讲解 / 已解答
+  askedAt     DateTime  @default(now()) @map("asked_at") // 提问时间（可回溯补录）
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  images      StudentQuestionImage[]
+
+  @@map("student_questions")
+}
+
+model StudentQuestionImage {
+  id         String          @id @default(cuid())
+  questionId Int             @map("question_id")
+  question   StudentQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  imageId    String          @map("image_id")
+  image      ProblemImage    @relation(fields: [imageId], references: [id])
+  sortOrder  Int             @default(0) @map("sort_order")
+
+  @@map("student_question_images")
 }
