@@ -98,6 +98,15 @@ function nodePlainText(node: TipTapNode): string {
   return out;
 }
 
+/** 递归判断块是否有实际内容：任意文字、图片、公式 都算（图片常在 paragraph 内部，不能只查顶层） */
+function nodeHasContent(node: TipTapNode): boolean {
+  if (node.type === "image" || node.type === "figureFrame") return true;
+  if (node.type === "inlineMath" || node.type === "math") return true;
+  if ((node.text || "").trim()) return true;
+  if (Array.isArray(node.content)) return node.content.some(nodeHasContent);
+  return false;
+}
+
 /** 选项行：A. / A、/ A．/ A) / A： 等（仅限单字母 A–D 开头） */
 const OPTION_LINE_RE = /^\s*[A-D][.、．:：)）]/;
 /** 小问行：（1）/ (1) / ① 等 */
@@ -391,7 +400,7 @@ export async function exportProblemsToDocx(
         try {
           const adoc = JSON.parse(problem.answer);
           const ablocks = (adoc.content || []) as TipTapNode[];
-          if (ablocks.some((b) => nodePlainText(b).trim() || b.type === "image")) {
+          if (ablocks.some(nodeHasContent)) {
             docChildren.push(
               new Paragraph({
                 spacing: { before: 80, after: 60 },
